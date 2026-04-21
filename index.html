@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AnimTypo — Animated Loop Typography</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #0a0a0a;
+      font-family: 'Space Grotesk', sans-serif;
+      color: #e0e0e0;
+    }
+
+    /* ── Page containers ── */
+    #page-home {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100vh;
+      overflow-y: auto;
+      overflow-x: hidden;
+      background: #0a0a0a;
+    }
+
+    #page-editor {
+      display: flex;
+      flex-direction: column;
+      width: 100%;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    /* ── Editor top bar ── */
+    #editor-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 44px;
+      min-height: 44px;
+      background: #111111;
+      border-bottom: 1px solid #1e1e1e;
+      padding: 0 16px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    #editor-topbar .topbar-back {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      background: none;
+      border: none;
+      color: #666;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 12px;
+      cursor: pointer;
+      padding: 6px 10px;
+      border-radius: 4px;
+      transition: color 0.15s, background 0.15s;
+      letter-spacing: 0.04em;
+    }
+    #editor-topbar .topbar-back:hover {
+      color: #e0e0e0;
+      background: #1a1a1a;
+    }
+    #editor-topbar .topbar-back svg {
+      width: 14px; height: 14px;
+    }
+
+    #editor-topbar .topbar-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #aaa;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      position: absolute;
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      pointer-events: none;
+    }
+
+    #editor-topbar .topbar-save {
+      background: rgba(0,255,136,0.12);
+      border: 1px solid #00ff88;
+      color: #00ff88;
+      font-family: 'Space Grotesk', sans-serif;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      padding: 5px 14px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #editor-topbar .topbar-save:hover {
+      background: rgba(0,255,136,0.22);
+    }
+
+    /* ── Editor body (canvas + panel) ── */
+    #editor-body {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    #preview {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0a0a;
+      overflow: hidden;
+    }
+
+    #preview canvas {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    #fps-badge {
+      position: absolute;
+      top: 12px;
+      left: 12px;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      color: #00ff88;
+      opacity: 0.6;
+      pointer-events: none;
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- ── Page: Home ── -->
+  <div id="page-home">
+    <div id="home-content"></div>
+  </div>
+
+  <!-- ── Page: Editor ── -->
+  <div id="page-editor" style="display:none">
+    <!-- Top bar -->
+    <div id="editor-topbar">
+      <button class="topbar-back" id="btn-back">
+        <svg viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M9 2L4 7l5 5"/>
+        </svg>
+        Home
+      </button>
+      <span class="topbar-title" id="editor-template-name">AnimTypo</span>
+      <button class="topbar-save" id="btn-save">Save</button>
+    </div>
+
+    <!-- Canvas + Panel -->
+    <div id="editor-body">
+      <div id="preview">
+        <canvas id="canvas"></canvas>
+        <div id="fps-badge">-- fps</div>
+      </div>
+      <div id="panel"></div>
+    </div>
+  </div>
+
+  <!-- JSZip for PNG sequence and ProRes luma ZIP packaging -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+  <!--
+    ffmpeg.wasm — loaded lazily (only when user triggers MP4 or ProRes export).
+    Requires COOP/COEP headers for SharedArrayBuffer — set in vite.config.js.
+  -->
+  <script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.6/dist/umd/ffmpeg.js" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js" crossorigin="anonymous"></script>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

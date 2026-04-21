@@ -1,0 +1,24 @@
+{
+  "name": "animtypo",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.4",
+    "jsdom": "^29.0.2",
+    "vite": "^8.0.9",
+    "vitest": "^4.1.4"
+  }
+}
