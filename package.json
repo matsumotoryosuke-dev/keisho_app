@@ -1,7 +1,7 @@
 {
-  "name": "animtypo",
-  "version": "1.0.0",
-  "description": "",
+  "name": "keisho",
+  "version": "0.4.0",
+  "description": "形象 — Animated loop typography tool by Kuuki Design",
   "main": "index.js",
   "scripts": {
     "dev": "vite",

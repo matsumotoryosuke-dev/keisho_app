@@ -268,7 +268,7 @@ export function buildHome(containerEl) {
   header.className = 'home-header';
   header.innerHTML = `
     <div class="home-wordmark">
-      <span class="home-logo">AnimTypo</span>
+      <span class="home-logo">形象</span>
       <span class="home-version">v0.4</span>
     </div>
     <p class="home-tagline">Pick a template to start animating</p>

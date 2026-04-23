@@ -287,7 +287,7 @@ export function updateTemplateParams(template) {
 // Main buildControls entry point
 // ─────────────────────────────────────────────────────────────────────────────
 export function buildControls(renderer, textLayer, effects, panelEl, appState) {
-  if (!panelEl) { console.error('[AnimTypo] buildControls: panelEl is null — aborting'); return; }
+  if (!panelEl) { console.error('[形象] buildControls: panelEl is null — aborting'); return; }
 
   const {
     templates,
@@ -659,6 +659,6 @@ export function buildControls(renderer, textLayer, effects, panelEl, appState) {
   // Footer
   const footer = document.createElement('div');
   footer.className = 'panel-footer';
-  footer.innerHTML = '<p class="panel-footer-text">AnimTypo · Kuuki Design</p>';
+  footer.innerHTML = '<p class="panel-footer-text">形象 · Kuuki Design</p>';
   panelEl.appendChild(footer);
 }
