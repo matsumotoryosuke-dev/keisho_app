@@ -33,3 +33,7 @@ npm-debug.log*
 
 # Claude Code session files
 .claude/
+
+# MCP server dependencies
+mcp/node_modules/
+mcp/.playwright/

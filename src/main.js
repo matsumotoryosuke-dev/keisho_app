@@ -13,6 +13,7 @@ import { buildHome } from './ui/home.js';
 import { openSaveModal } from './ui/saveModal.js';
 import { createSave, getSaveById, updateSave, captureThumbnail } from './saves.js';
 import { AudioEngine } from './engine/audioEngine.js';
+import { Exporter, EXPORT_PRESETS } from './engine/exporter.js';
 
 // ── Audio engine (singleton for this session) ──────────────────
 const audioEngine = new AudioEngine();
@@ -239,6 +240,59 @@ function getSnapshotRenderer() {
   };
 }
 
+// ── Headless export mode (used by MCP server / AI agents) ─────────────────
+async function doHeadlessExport(format, resolution) {
+  const preset = EXPORT_PRESETS.find(p => p.id === resolution) || EXPORT_PRESETS.find(p => p.id === '1080p');
+  console.log(`[headless] starting ${format} export at ${resolution}`);
+
+  const exporter = new Exporter(getSnapshotRenderer(), {
+    width:         preset.width,
+    height:        preset.height,
+    fps:           60,
+    loopDuration:  renderer.loopDuration,
+    transparentBg: false,
+    onProgress: (pct) => console.log(`[headless] ${(pct * 100).toFixed(0)}%`),
+    onStatus:   (msg) => console.log(`[headless] ${msg}`),
+  });
+
+  if (format === 'png-zip')     await exporter.exportPNGZip();
+  else if (format === 'mp4')    await exporter.exportMP4();
+  else if (format === 'prores') await exporter.exportProResLuma();
+  else                          await exporter.exportWebM();
+
+  console.log('[headless] export complete');
+}
+
+function tryHeadlessMode() {
+  const sp = new URLSearchParams(window.location.search);
+  if (sp.get('headless') !== '1') return;
+
+  // Apply params from query string
+  const text = sp.get('text');
+  if (text) textProxy.text = decodeURIComponent(text);
+
+  const ld = parseFloat(sp.get('loopDuration'));
+  if (!isNaN(ld) && ld > 0) renderer.loopDuration = ld * 1000;
+
+  const format     = sp.get('format') || 'webm';
+  const resolution = sp.get('resolution') || '1080p';
+
+  // Let the renderer warm up for a few frames before triggering export
+  let warmupFrames = 0;
+  const origOnFrame = renderer.onFrame;
+  renderer.onFrame = (time, ctx, canvasEl) => {
+    origOnFrame(time, ctx, canvasEl);
+    warmupFrames++;
+    if (warmupFrames === 5) {
+      // Restore and trigger export
+      renderer.onFrame = origOnFrame;
+      doHeadlessExport(format, resolution).catch(err => {
+        console.error('[headless] export error:', err);
+      });
+    }
+  };
+}
+
 // ── Build editor UI ────────────────────────────────────────────
 let _controlsBuilt = false;
 
@@ -357,11 +411,14 @@ onRouteChange((page, hash) => {
     } else if (params.template) {
       _currentSaveId = null;
       applyTemplate(params.template);
+      // Allow MCP / deep-links to override the template's default palette
+      if (params.palette) applyPalette(params.palette);
     } else {
       _currentSaveId = null;
       applyTemplate(DEFAULT_TEMPLATE_ID);
     }
 
+    tryHeadlessMode();
     renderer.start();
   } else {
     // Home page

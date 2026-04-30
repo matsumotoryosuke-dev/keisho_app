@@ -1,0 +1,16 @@
+{
+  "name": "keisho-mcp",
+  "version": "0.4.0",
+  "description": "MCP server for 形象 — generate animated loop typography via AI agents",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "setup": "npm install && npx playwright install chromium"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "playwright": "^1.52.0",
+    "zod": "^3.24.0"
+  }
+}
