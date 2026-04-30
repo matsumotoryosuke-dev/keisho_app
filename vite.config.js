@@ -28,6 +28,10 @@ export default {
   test: {
     environment: 'jsdom',
     globals: true,
+    // Disable file-level parallelism: the forks pool times out when spawning
+    // workers in a path with spaces (macOS + Node 25). Running all test files
+    // serially in a single worker is 10× faster than vmThreads here.
+    fileParallelism: false,
     coverage: { provider: 'v8', reporter: ['text', 'html'] },
   },
 };

@@ -8,13 +8,12 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-// Helper: set window.location.hash without triggering JSDOM navigation errors.
+// Helper: set window.location.hash directly.
+// jsdom supports assignment to window.location.hash; Object.defineProperty
+// fails on the second call because 'location' is non-configurable after the
+// first redefinition.
 function setHash(hash) {
-  Object.defineProperty(window, 'location', {
-    value: { ...window.location, hash },
-    writable: true,
-    configurable: true,
-  });
+  window.location.hash = hash;
 }
 
 // Import AFTER helpers are defined so the module-level addEventListener call
