@@ -5,7 +5,7 @@ export const TEMPLATES = [
   { id: 'scatter-reform',      name: 'Scatter & Reform',    category: 'text',     description: 'Letters explode then snap back into place' },
   { id: 'outline-flow',        name: 'Outline Flow',        category: 'text',     description: 'Edge particles trace letterform outlines' },
   { id: 'per-char-blur',       name: 'Blur Pulse',          category: 'text',     description: 'Each character pulses in and out of focus' },
-  { id: 'flip-3d',             name: 'Flip 3D',             category: 'text',     description: 'Characters flip on their Y axis' },
+  { id: '3d-flip',              name: 'Flip 3D',             category: 'text',     description: 'Characters flip on their Y axis' },
   { id: 'neon-trace',          name: 'Neon Trace',          category: 'text',     description: 'Neon light traces letterform edges' },
   { id: 'wave-morph',          name: 'Wave Morph',          category: 'text',     description: 'Text surface ripples like water' },
   { id: 'gravity-fall',        name: 'Gravity Fall',        category: 'text',     description: 'Glyph pixels drop under gravity then reform' },
