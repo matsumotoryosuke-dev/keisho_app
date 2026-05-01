@@ -205,6 +205,13 @@ function getSnapshotRenderer() {
   const snapshotPaletteId  = currentPaletteId;
   const snapshotTransparent = transparentBg;
 
+  // Glyph data must be resampled at the EXPORT canvas size, not the display
+  // canvas size. Display is always 1920×1080; export can be 1280×720, 4K, etc.
+  // Using display-canvas coordinates on an export canvas shifts everything
+  // to the wrong position (typically off-screen bottom-right).
+  let _exportGlyphData = null;
+  let _exportGlyphKey  = '';
+
   return (time, ctx, canvasEl) => {
     const w       = canvasEl.width;
     const h       = canvasEl.height;
@@ -217,7 +224,26 @@ function getSnapshotRenderer() {
       ctx.fillRect(0, 0, w, h);
     }
 
-    const glyphData = getGlyphData();
+    // Resample glyph data at the export resolution on the first frame,
+    // then cache it for the rest of the export sequence.
+    let glyphData = null;
+    if (snapshotTemplate.category !== 'geometry' && snapshotTemplate.needsGlyphs !== false) {
+      const exportKey = `${textState.text}|${textState.font}|${textState.size}|${textState.letterSpacing}|${w}|${h}`;
+      if (_exportGlyphKey !== exportKey) {
+        const density = snapshotTemplate.density || 0.25;
+        _exportGlyphData = sampleGlyphPixels(
+          textState.text,
+          textState.font,
+          textState.size,
+          textState.letterSpacing,
+          w,
+          h,
+          density,
+        );
+        _exportGlyphKey = exportKey;
+      }
+      glyphData = _exportGlyphData;
+    }
 
     const audioData = {
       waveform:  audioEngine.getWaveform(),
