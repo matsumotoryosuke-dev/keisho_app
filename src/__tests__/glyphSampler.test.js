@@ -245,3 +245,32 @@ describe('sampleGlyphPixels — density in cache key (P2-05)', () => {
     expect(r1).not.toBe(r2);
   });
 });
+
+describe('sampleGlyphPixels — canvas dimensions in cache key', () => {
+  // This invariant is load-bearing for the export centering fix (274f058):
+  // the snapshot renderer calls sampleGlyphPixels with the EXPORT canvas
+  // dimensions. If the cache did not key on dimensions, a prior display-canvas
+  // sample (1920×1080) would be returned for a 1280×720 export, placing all
+  // particles at the wrong positions.
+
+  it('changing canvas width returns a NEW object (cache miss)', () => {
+    invalidateGlyphCache();
+    const r1 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 40, 20, 0.25);
+    const r2 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 60, 20, 0.25);
+    expect(r1).not.toBe(r2);
+  });
+
+  it('changing canvas height returns a NEW object (cache miss)', () => {
+    invalidateGlyphCache();
+    const r1 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 40, 20, 0.25);
+    const r2 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 40, 30, 0.25);
+    expect(r1).not.toBe(r2);
+  });
+
+  it('same canvas dimensions return the same cached object (cache hit)', () => {
+    invalidateGlyphCache();
+    const r1 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 40, 20, 0.25);
+    const r2 = sampleGlyphPixels('EXPORT', 'Font', 14, 0, 40, 20, 0.25);
+    expect(r1).toBe(r2);
+  });
+});
