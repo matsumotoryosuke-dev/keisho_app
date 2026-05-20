@@ -37,3 +37,6 @@ npm-debug.log*
 # MCP server dependencies
 mcp/node_modules/
 mcp/.playwright/
+
+# ffmpeg WASM binaries (large, fetched at runtime)
+public/ffmpeg/

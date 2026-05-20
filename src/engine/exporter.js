@@ -14,17 +14,31 @@
  *   official docs — only libx264, libx265, libvpx are bundled). The ProRes
  *   option therefore uses a two-file luma-matte approach:
  *     1. animtypo-rgb.mp4   — H.264 in a .mp4 container (color+luma, black bg)
- *     2. animtypo-alpha.webm — VP9 grayscale alpha mask
+ *     2. animtypo-alpha.webm — VP8 grayscale alpha mask
  *   Both files ship in a ZIP. In FCPX/Resolve, composite RGB over any bg using
  *   the alpha-mask clip on a luma-matte layer. This is a standard VFX workflow.
  *
  * Usage:
- *   const exporter = new Exporter(renderFrame, { width, height, fps, loopDuration, transparentBg, onProgress, onStatus })
+ *   const exporter = new Exporter(renderFrame, { width, height, fps, loopDuration,
+ *                                                transparentBg, captureScale,
+ *                                                onProgress, onStatus })
  *   await exporter.exportWebM()
  *   await exporter.exportPNGZip()
  *   await exporter.exportMP4()
  *   await exporter.exportProResLuma()
  */
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Module-level constants and helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Canonical coordinate space used by all templates and glyph samplers.
+// Capture canvases are always mapped into this space regardless of export res.
+const COORD_W = 1920;
+const COORD_H = 1080;
+
+// Yield to the browser event loop so the UI stays responsive during long exports.
+const yieldToMain = () => new Promise(r => setTimeout(r, 0));
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ffmpeg.wasm lazy loader
@@ -34,7 +48,7 @@ let _ffmpegInstance = null;
 let _ffmpegLoading  = null; // Promise while in-flight
 
 /**
- * Load ffmpeg.wasm lazily from CDN (only on first call).
+ * Load ffmpeg.wasm lazily (only on first call).
  * Resolves to a ready FFmpeg instance.
  * @param {Function} [onStatus]  (msg: string) => void — for UI feedback
  */
@@ -52,21 +66,23 @@ async function getFFmpeg(onStatus) {
     }
 
     const { FFmpeg } = window.FFmpegWASM;
-    const { fetchFile, toBlobURL } = window.FFmpegUtil;
+    const { toBlobURL } = window.FFmpegUtil;
 
     const ffmpeg = new FFmpeg();
 
-    if (onStatus) onStatus('Loading ffmpeg.wasm (~20 MB, first use only)…');
+    if (onStatus) onStatus('Loading ffmpeg.wasm…');
 
-    // Load the core WASM from CDN — must use toBlobURL so the worker can fetch it
-    // under our COEP headers.
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
+    // Load the core WASM from local /ffmpeg/ (self-hosted in public/ffmpeg/).
+    // Using same-origin paths avoids CDN latency and cross-origin fetch issues.
+    // toBlobURL fetches the resource and creates a same-origin blob URL so the
+    // Worker can load it regardless of COEP policy.
+    const baseURL = '/ffmpeg';
     await ffmpeg.load({
       coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
       wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
     });
 
-    _ffmpegInstance = { ffmpeg, fetchFile };
+    _ffmpegInstance = { ffmpeg };
     return _ffmpegInstance;
   })();
 
@@ -91,6 +107,10 @@ export class Exporter {
    * @param {number}   opts.fps
    * @param {number}   opts.loopDuration    ms
    * @param {boolean}  opts.transparentBg
+   * @param {number}   [opts.captureScale=1]  Internal render scale (0–1). Frames are
+   *                                          captured at width×captureScale pixels and
+   *                                          upscaled by ffmpeg with lanczos. 0.5 cuts
+   *                                          pixel count to 25%, ~4× faster in headless.
    * @param {Function} [opts.onProgress]    (pct: 0–1) => void
    * @param {Function} [opts.onStatus]      (msg: string) => void
    */
@@ -101,6 +121,7 @@ export class Exporter {
     this.fps           = opts.fps           || 60;
     this.loopMs        = opts.loopDuration  || 3000;
     this.transparentBg = opts.transparentBg !== undefined ? opts.transparentBg : true;
+    this.captureScale  = opts.captureScale  !== undefined ? opts.captureScale  : 1.0;
     this.onProgress    = opts.onProgress    || null;
     this.onStatus      = opts.onStatus      || null;
     this._cancelExport = false;
@@ -119,6 +140,10 @@ export class Exporter {
     return Math.ceil((this.loopMs / 1000) * this.fps);
   }
 
+  /** Capture canvas dimensions (may be smaller than output when captureScale < 1). */
+  get _captureW() { return Math.round(this.width  * this.captureScale); }
+  get _captureH() { return Math.round(this.height * this.captureScale); }
+
   _status(msg) {
     if (this.onStatus) this.onStatus(msg);
   }
@@ -127,32 +152,39 @@ export class Exporter {
     if (this.onProgress) this.onProgress(pct);
   }
 
+  /** Zero-padded frame number string for ffmpeg pattern inputs. */
+  _padFrame(f) {
+    return String(f).padStart(5, '0');
+  }
+
   /**
-   * Capture all frames as PNG ArrayBuffers.
-   * Returns an array of { arrayBuffer, padded } objects.
-   * @param {boolean} [forceOpaqueBg]  Override transparentBg for RGB-only passes
+   * Capture all frames as image ArrayBuffers.
+   *
+   * Frames are rendered at _captureW × _captureH. When captureScale < 1 the
+   * caller is responsible for passing the scale filter to ffmpeg (lanczos).
+   *
+   * @param {boolean} [forceOpaqueBg=false]   Paint black under the frame (RGB pass).
+   * @param {string}  [blobType='image/jpeg'] MIME type for frame compression.
+   *                  Pass 'image/png' for PNG-Zip exports that need lossless frames.
    */
-  async _captureFrames(forceOpaqueBg = false) {
+  async _captureFrames(forceOpaqueBg = false, blobType = 'image/jpeg') {
     const total = this._totalFrames;
-    const offscreen = new OffscreenCanvas(this.width, this.height);
+    const cW = this._captureW;
+    const cH = this._captureH;
+    const offscreen = new OffscreenCanvas(cW, cH);
     const ctx = offscreen.getContext('2d', { willReadFrequently: true });
 
-    // Glyph data is always sampled at 1920×1080 (the preview resolution).
-    // At any other export resolution we scale the context so that glyph
-    // coordinates — which live in 1080p space — map correctly to the full
-    // export canvas.  renderFrame receives a mock canvas object whose
-    // width/height report 1920×1080 so all glyph math stays in that space,
-    // while the scale transform maps the drawing to the real export size.
-    const BASE_W = 1920;
-    const BASE_H = 1080;
-    const scaleX = this.width  / BASE_W;
-    const scaleY = this.height / BASE_H;
+    // Map COORD_W×COORD_H glyph coordinate space to the capture canvas.
+    // Handles both non-native export resolutions and captureScale < 1.
+    const scaleX = cW / COORD_W;
+    const scaleY = cH / COORD_H;
     const needsScale = scaleX !== 1 || scaleY !== 1;
 
-    // Mock canvas object for renderFrame when scaling is active
+    // renderFrame receives a mock canvas whose width/height report COORD_W×COORD_H
+    // so all glyph math stays in that coordinate space.
     const mockCanvas = needsScale ? {
-      width:      BASE_W,
-      height:     BASE_H,
+      width:      COORD_W,
+      height:     COORD_H,
       getContext: () => ctx,
     } : offscreen;
 
@@ -163,12 +195,11 @@ export class Exporter {
 
       const t = f / total;
 
-      ctx.clearRect(0, 0, this.width, this.height);
+      ctx.clearRect(0, 0, cW, cH);
 
       if (forceOpaqueBg) {
-        // For RGB pass: paint black so the codec has a real luma signal
         ctx.fillStyle = '#000000';
-        ctx.fillRect(0, 0, this.width, this.height);
+        ctx.fillRect(0, 0, cW, cH);
       }
 
       if (needsScale) {
@@ -180,54 +211,65 @@ export class Exporter {
         this.renderFrame(t, ctx, offscreen);
       }
 
-      const blob = await offscreen.convertToBlob({ type: 'image/png' });
+      const blobOpts = blobType === 'image/jpeg'
+        ? { type: 'image/jpeg', quality: 0.85 }
+        : { type: blobType };
+      const blob = await offscreen.convertToBlob(blobOpts);
       const arrayBuffer = await blob.arrayBuffer();
-      const padded = String(f).padStart(5, '0');
-      frames.push({ arrayBuffer, padded });
+      frames.push({ arrayBuffer, padded: this._padFrame(f) });
 
-      this._progress(f / total * 0.5); // frames = first 50 % of total progress
+      this._progress(f / total * 0.5); // frames = first 50% of total progress
 
-      if (f % 10 === 0) await new Promise(r => setTimeout(r, 0));
+      if (f % 10 === 0) await yieldToMain();
     }
 
     return frames;
   }
 
   /**
-   * Capture alpha-only frames (white-on-black mask).
+   * Single-pass combined capture — renders each frame once with transparency,
+   * then derives both the RGB composite (premultiplied on black) and the
+   * grayscale alpha mask from the same pixel data.
+   *
+   * Returns { rgbFrames, alphaFrames }, each an array of { arrayBuffer, padded }.
+   * Both use JPEG compression; the alpha channel is encoded as a grayscale image.
+   *
+   * This replaces the old two-pass approach and is ~2× faster since the
+   * renderer runs only once per frame.
    */
-  async _captureAlphaFrames() {
+  async _captureFramesPair() {
     const total = this._totalFrames;
-    const src = new OffscreenCanvas(this.width, this.height);
-    const srcCtx = src.getContext('2d', { willReadFrequently: true });
-    const dst = new OffscreenCanvas(this.width, this.height);
-    const dstCtx = dst.getContext('2d', { willReadFrequently: true });
+    const cW = this._captureW;
+    const cH = this._captureH;
 
-    // Apply the same coordinate-scaling fix as _captureFrames so that
-    // at 4K (or any non-1080p resolution) the alpha matte aligns with
-    // the RGB pass.
-    const BASE_W = 1920;
-    const BASE_H = 1080;
-    const scaleX = this.width  / BASE_W;
-    const scaleY = this.height / BASE_H;
+    const src         = new OffscreenCanvas(cW, cH);
+    const srcCtx      = src.getContext('2d', { willReadFrequently: true });
+    const rgbCanvas   = new OffscreenCanvas(cW, cH);
+    const rgbCtx      = rgbCanvas.getContext('2d');
+    const alphaCanvas = new OffscreenCanvas(cW, cH);
+    const alphaCtx    = alphaCanvas.getContext('2d');
+
+    const scaleX     = cW / COORD_W;
+    const scaleY     = cH / COORD_H;
     const needsScale = scaleX !== 1 || scaleY !== 1;
 
     const mockCanvas = needsScale ? {
-      width:      BASE_W,
-      height:     BASE_H,
+      width:      COORD_W,
+      height:     COORD_H,
       getContext: () => srcCtx,
     } : src;
 
-    const frames = [];
+    const rgbFrames   = [];
+    const alphaFrames = [];
 
     for (let f = 0; f < total; f++) {
       if (this._cancelExport) break;
 
-      const t = f / total;
+      const t      = f / total;
+      const padded = this._padFrame(f);
 
-      // Render with transparency
-      srcCtx.clearRect(0, 0, this.width, this.height);
-
+      // Render with transparency (single pass)
+      srcCtx.clearRect(0, 0, cW, cH);
       if (needsScale) {
         srcCtx.save();
         srcCtx.scale(scaleX, scaleY);
@@ -237,32 +279,50 @@ export class Exporter {
         this.renderFrame(t, srcCtx, src);
       }
 
-      // Extract alpha channel → greyscale mask
-      const imageData = srcCtx.getImageData(0, 0, this.width, this.height);
-      const { data } = imageData;
-      const maskData = dstCtx.createImageData(this.width, this.height);
-      const mask = maskData.data;
+      // Extract RGBA once; derive both outputs from the same pixel data
+      const imageData = srcCtx.getImageData(0, 0, cW, cH);
+      const { data }  = imageData;
+
+      const rgbData   = rgbCtx.createImageData(cW, cH);
+      const rd        = rgbData.data;
+      const alphaData = alphaCtx.createImageData(cW, cH);
+      const ad        = alphaData.data;
 
       for (let i = 0; i < data.length; i += 4) {
-        const a = data[i + 3];
-        mask[i]     = a;
-        mask[i + 1] = a;
-        mask[i + 2] = a;
-        mask[i + 3] = 255;
+        const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+        const af = a / 255;
+        // Premultiply on black background for H.264 RGB pass
+        rd[i]     = (r * af) | 0;
+        rd[i + 1] = (g * af) | 0;
+        rd[i + 2] = (b * af) | 0;
+        rd[i + 3] = 255; // fully opaque for the codec
+        // Grayscale alpha mask: white = opaque, black = transparent
+        ad[i] = ad[i + 1] = ad[i + 2] = a;
+        ad[i + 3] = 255;
       }
 
-      dstCtx.clearRect(0, 0, this.width, this.height);
-      dstCtx.putImageData(maskData, 0, 0);
+      rgbCtx.putImageData(rgbData, 0, 0);
+      alphaCtx.putImageData(alphaData, 0, 0);
 
-      const blob = await dst.convertToBlob({ type: 'image/png' });
-      const arrayBuffer = await blob.arrayBuffer();
-      const padded = String(f).padStart(5, '0');
-      frames.push({ arrayBuffer, padded });
+      // Compress both JPEGs in parallel — halves the blob encoding wait
+      const [rgbBlob, alphaBlob] = await Promise.all([
+        rgbCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
+        alphaCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.85 }),
+      ]);
+      const [rgbAB, alphaAB] = await Promise.all([
+        rgbBlob.arrayBuffer(),
+        alphaBlob.arrayBuffer(),
+      ]);
 
-      if (f % 10 === 0) await new Promise(r => setTimeout(r, 0));
+      rgbFrames.push({ arrayBuffer: rgbAB, padded });
+      alphaFrames.push({ arrayBuffer: alphaAB, padded });
+
+      this._progress(f / total * 0.5); // single pass = first 50%
+
+      if (f % 10 === 0) await yieldToMain();
     }
 
-    return frames;
+    return { rgbFrames, alphaFrames };
   }
 
   _download(blob, filename) {
@@ -281,7 +341,7 @@ export class Exporter {
     const hasVP9   = MediaRecorder.isTypeSupported(mimeType);
     const actualMime = hasVP9 ? mimeType : 'video/webm;codecs=vp8';
 
-    const total          = this._totalFrames;
+    const total           = this._totalFrames;
     const frameDurationMs = 1000 / this.fps;
 
     const exportCanvas = document.createElement('canvas');
@@ -334,14 +394,14 @@ export class Exporter {
     const zip    = new JSZip();
     const folder = zip.folder('animtypo-frames');
 
-    const frames = await this._captureFrames();
-    // Override progress to cover the full 100 %
-    const total = this._totalFrames;
+    // Force PNG so users receive lossless frames (JPEG default is only for ffmpeg)
+    const frames = await this._captureFrames(false, 'image/png');
+    const total  = this._totalFrames;
     for (let i = 0; i < frames.length; i++) {
       const { arrayBuffer, padded } = frames[i];
       folder.file(`frame_${padded}.png`, arrayBuffer);
       this._progress(i / total);
-      if (i % 10 === 0) await new Promise(r => setTimeout(r, 0));
+      if (i % 10 === 0) await yieldToMain();
     }
 
     const zipBlob = await zip.generateAsync({ type: 'blob' });
@@ -355,30 +415,34 @@ export class Exporter {
     this._cancelExport = false;
 
     this._status('Initializing ffmpeg.wasm…');
-    const { ffmpeg, fetchFile } = await getFFmpeg(this.onStatus);
+    const { ffmpeg } = await getFFmpeg(this.onStatus);
 
     this._status('Rendering frames…');
     const frames = await this._captureFrames(/* forceOpaqueBg= */ true);
 
     this._status('Writing frames to ffmpeg virtual FS…');
     for (const { arrayBuffer, padded } of frames) {
-      await ffmpeg.writeFile(`frame_${padded}.png`, new Uint8Array(arrayBuffer));
+      await ffmpeg.writeFile(`frame_${padded}.jpg`, new Uint8Array(arrayBuffer));
     }
 
     this._status('Encoding MP4 H.264…');
-
-    // Wire up ffmpeg progress events
     ffmpeg.on('progress', ({ progress }) => {
-      // progress is 0–1 during encode, map to 50–100 % of our bar
       this._progress(0.5 + progress * 0.5);
     });
 
+    // Upscale to target resolution when captureScale < 1
+    const scaleFilter = this.captureScale < 1
+      ? ['-vf', `scale=${this.width}:${this.height}:flags=lanczos`]
+      : [];
+
     await ffmpeg.exec([
       '-framerate', String(this.fps),
-      '-i',         'frame_%05d.png',
+      '-i',         'frame_%05d.jpg',
       '-c:v',       'libx264',
+      '-preset',    'veryfast',
       '-pix_fmt',   'yuv420p',
       '-movflags',  '+faststart',
+      ...scaleFilter,
       '-r',         String(this.fps),
       'output.mp4',
     ]);
@@ -386,12 +450,10 @@ export class Exporter {
     const data = await ffmpeg.readFile('output.mp4');
     const blob = new Blob([data.buffer], { type: 'video/mp4' });
 
-    // Clean up virtual FS
     for (const { padded } of frames) {
-      await ffmpeg.deleteFile(`frame_${padded}.png`).catch(() => {});
+      await ffmpeg.deleteFile(`frame_${padded}.jpg`).catch(() => {});
     }
     await ffmpeg.deleteFile('output.mp4').catch(() => {});
-
     ffmpeg.off('progress');
 
     this._download(blob, 'animtypo-export.mp4');
@@ -405,7 +467,7 @@ export class Exporter {
   // build. This method produces the equivalent professional workflow:
   //
   //   animtypo-rgb.mp4    — H.264, black background, full color+luma
-  //   animtypo-alpha.webm — VP9 grayscale alpha mask (white = opaque)
+  //   animtypo-alpha.webm — VP8 grayscale alpha mask (white = opaque)
   //
   // In FCPX: import both, place rgb.mp4 on timeline, use alpha.webm as a
   //   Luma Keyer source on the same clip.
@@ -420,24 +482,25 @@ export class Exporter {
     }
 
     this._status('Initializing ffmpeg.wasm…');
-    const { ffmpeg, fetchFile } = await getFFmpeg(this.onStatus);
+    const { ffmpeg } = await getFFmpeg(this.onStatus);
 
-    // ── Pass 1: RGB frames (black background) ──
-    this._status('Rendering RGB frames…');
-    const rgbFrames = await this._captureFrames(/* forceOpaqueBg= */ true);
+    // Single-pass: render each frame once and derive both RGB and alpha outputs.
+    this._status('Rendering frames (single pass)…');
+    const { rgbFrames, alphaFrames } = await this._captureFramesPair();
 
-    // ── Pass 2: Alpha mask frames ──
-    this._status('Rendering alpha mask frames…');
-    const alphaFrames = await this._captureAlphaFrames();
-
-    // ── Write RGB frames to WASM FS ──
+    // Write all frames to WASM FS concurrently (in-memory I/O, safe to parallelize)
     this._status('Writing frames to ffmpeg virtual FS…');
-    for (const { arrayBuffer, padded } of rgbFrames) {
-      await ffmpeg.writeFile(`rgb_${padded}.png`, new Uint8Array(arrayBuffer));
-    }
-    for (const { arrayBuffer, padded } of alphaFrames) {
-      await ffmpeg.writeFile(`alpha_${padded}.png`, new Uint8Array(arrayBuffer));
-    }
+    await Promise.all([
+      ...rgbFrames.map(({ arrayBuffer, padded }) =>
+        ffmpeg.writeFile(`rgb_${padded}.jpg`, new Uint8Array(arrayBuffer))),
+      ...alphaFrames.map(({ arrayBuffer, padded }) =>
+        ffmpeg.writeFile(`alpha_${padded}.jpg`, new Uint8Array(arrayBuffer))),
+    ]);
+
+    // Upscale to target resolution when captureScale < 1
+    const scaleFilter = this.captureScale < 1
+      ? ['-vf', `scale=${this.width}:${this.height}:flags=lanczos`]
+      : [];
 
     // ── Encode RGB → H.264 MP4 ──
     this._status('Encoding RGB channel (H.264)…');
@@ -447,29 +510,34 @@ export class Exporter {
 
     await ffmpeg.exec([
       '-framerate', String(this.fps),
-      '-i',         'rgb_%05d.png',
+      '-i',         'rgb_%05d.jpg',
       '-c:v',       'libx264',
+      '-preset',    'veryfast',
       '-pix_fmt',   'yuv420p',
       '-movflags',  '+faststart',
+      ...scaleFilter,
       '-r',         String(this.fps),
       'rgb_output.mp4',
     ]);
 
     ffmpeg.off('progress');
 
-    // ── Encode Alpha mask → VP9 WebM (greyscale) ──
-    this._status('Encoding alpha mask channel (VP9)…');
+    // ── Encode Alpha mask → VP8 WebM (greyscale) ──
+    // VP8 is ~3× faster than VP9 in software mode with equivalent quality for
+    // a luma matte source; quality difference is imperceptible after compositing.
+    this._status('Encoding alpha mask channel (VP8)…');
     ffmpeg.on('progress', ({ progress }) => {
       this._progress(0.75 + progress * 0.25); // 75–100 %
     });
 
     await ffmpeg.exec([
       '-framerate', String(this.fps),
-      '-i',         'alpha_%05d.png',
-      '-c:v',       'libvpx-vp9',
+      '-i',         'alpha_%05d.jpg',
+      '-c:v',       'libvpx',
       '-pix_fmt',   'yuv420p',
       '-crf',       '10',
       '-b:v',       '0',
+      ...scaleFilter,
       '-r',         String(this.fps),
       'alpha_output.webm',
     ]);
@@ -513,10 +581,10 @@ export class Exporter {
 
     // ── Clean up WASM FS ──
     for (const { padded } of rgbFrames) {
-      await ffmpeg.deleteFile(`rgb_${padded}.png`).catch(() => {});
+      await ffmpeg.deleteFile(`rgb_${padded}.jpg`).catch(() => {});
     }
     for (const { padded } of alphaFrames) {
-      await ffmpeg.deleteFile(`alpha_${padded}.png`).catch(() => {});
+      await ffmpeg.deleteFile(`alpha_${padded}.jpg`).catch(() => {});
     }
     await ffmpeg.deleteFile('rgb_output.mp4').catch(() => {});
     await ffmpeg.deleteFile('alpha_output.webm').catch(() => {});
@@ -533,9 +601,9 @@ export class Exporter {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const EXPORT_PRESETS = [
-  { id: '1080p',    label: '1080p (1920×1080)',  width: 1920, height: 1080 },
-  { id: '4k',       label: '4K (3840×2160)',      width: 3840, height: 2160 },
-  { id: '720p',     label: '720p (1280×720)',      width: 1280, height: 720  },
-  { id: 'square',   label: 'Square (1080×1080)',  width: 1080, height: 1080 },
+  { id: '1080p',    label: '1080p (1920×1080)',   width: 1920, height: 1080 },
+  { id: '4k',       label: '4K (3840×2160)',       width: 3840, height: 2160 },
+  { id: '720p',     label: '720p (1280×720)',       width: 1280, height: 720  },
+  { id: 'square',   label: 'Square (1080×1080)',   width: 1080, height: 1080 },
   { id: 'portrait', label: 'Portrait (1080×1920)', width: 1080, height: 1920 },
 ];

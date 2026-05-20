@@ -39,10 +39,22 @@ export function hexToRGB(hex) {
 function lerpColor(hexA, hexB, t) {
   const [r1,g1,b1] = hexToRGB(hexA);
   const [r2,g2,b2] = hexToRGB(hexB);
-  const r = Math.round(lerp(r1,r2,t));
-  const g = Math.round(lerp(g1,g2,t));
-  const b = Math.round(lerp(b1,b2,t));
-  return `rgb(${r},${g},${b})`;
+  return `rgb(${Math.round(lerp(r1,r2,t))},${Math.round(lerp(g1,g2,t))},${Math.round(lerp(b1,b2,t))})`;
+}
+
+// Lerp between two pre-parsed [r,g,b] arrays — avoids re-parsing hex strings in hot loops.
+function lerpColorRGB(a, b, t) {
+  return `rgb(${Math.round(lerp(a[0],b[0],t))},${Math.round(lerp(a[1],b[1],t))},${Math.round(lerp(a[2],b[2],t))})`;
+}
+
+// Deterministic integer hash → [0, 1). Two-argument form for 2-D seeds.
+// Used for per-particle/per-vertex pseudo-random offsets that must be
+// frame-stable (same seed always produces the same value).
+function ihash(a, b = 0) {
+  let v = ((a * 1619 + b * 31337) * 2654435761) >>> 0;
+  v ^= v >>> 16;
+  v  = Math.imul(v, 0x45d9f3b);
+  return ((v ^ (v >>> 7)) >>> 0) / 0xFFFFFFFF;
 }
 
 // ── 1. Particle Field ──────────────────────────────────────────────────────
@@ -71,6 +83,9 @@ const particleField = {
     ctx.save();
     const TAU = Math.PI * 2;
     const phase = time * TAU;
+    const maxDist = Math.max(totalBbox.w, totalBbox.h) / 2;
+    const rgb_p   = hexToRGB(palette.primary);
+    const rgb_acc = hexToRGB(palette.accent);
 
     for (let i = 0; i < allPoints.length; i++) {
       const pt = allPoints[i];
@@ -78,23 +93,22 @@ const particleField = {
       const dx = pt.x - cx;
       const dy = pt.y - cy;
       const dist = Math.sqrt(dx*dx + dy*dy);
-      const maxDist = Math.max(totalBbox.w, totalBbox.h) / 2;
       const distNorm = clamp(dist / maxDist, 0, 1);
 
       // Breathing offset — unique per point using index as phase seed
       const ptPhase = (i * 0.00731) % 1; // quasi-random phase per point
       const breathAmt = 4 + distNorm * 8; // outer points move more
       const offsetX = Math.sin(phase + ptPhase * TAU) * breathAmt;
-      const offsetY = Math.cos(phase * 0.7 + ptPhase * TAU) * breathAmt;
+      const offsetY = Math.cos(phase + ptPhase * TAU) * breathAmt;  // was *0.7 → loop snap
 
       const x = pt.x + offsetX;
       const y = pt.y + offsetY;
 
       // Color gradient: primary at center → accent at edges
-      const col = lerpColor(palette.primary, palette.accent, distNorm);
+      const col = lerpColorRGB(rgb_p, rgb_acc, distNorm);
 
       // Size pulses slightly
-      const sz = 1.5 + 0.8 * Math.sin(phase * 1.3 + ptPhase * TAU);
+      const sz = 1.5 + 0.8 * Math.sin(phase * 2 + ptPhase * TAU);  // was *1.3 → loop snap
 
       ctx.globalAlpha = 0.85 + 0.15 * Math.sin(phase + ptPhase * TAU);
       ctx.fillStyle = col;
@@ -587,6 +601,7 @@ const waveMorph = {
   letterSpacing: 24,
   loopDuration: 4000,
   density: 0.28,
+  params: { amplitude: 14 },
 
   render(ctx, canvas, time, glyphData, palette) {
     if (!glyphData || glyphData.allPoints.length === 0) return;
@@ -596,10 +611,13 @@ const waveMorph = {
     const TAU = Math.PI * 2;
 
     // Wave field parameters
-    const waveSpeed  = time * TAU;          // scrolls with time
-    const waveFreqX  = TAU / (w * 0.22);   // spatial frequency
+    const waveSpeed  = time * TAU;                          // scrolls with time
+    const waveFreqX  = TAU / (w * 0.22);                   // spatial frequency
     const waveFreqY  = TAU / (h * 0.28);
-    const amplitude  = 14;                  // max displacement px
+    const amplitude  = this.params?.amplitude ?? 14;        // max displacement px
+
+    const rgb_text = hexToRGB(palette.text);
+    const rgb_acc  = hexToRGB(palette.accent);
 
     ctx.save();
 
@@ -608,16 +626,16 @@ const waveMorph = {
 
       // Two wave components (X and Y displacement)
       const waveX = Math.sin(pt.x * waveFreqX - waveSpeed) * amplitude
-                  + Math.sin(pt.y * waveFreqY + waveSpeed * 0.7) * amplitude * 0.5;
-      const waveY = Math.cos(pt.y * waveFreqY - waveSpeed * 0.8) * amplitude
-                  + Math.cos(pt.x * waveFreqX + waveSpeed * 0.5) * amplitude * 0.5;
+                  + Math.sin(pt.y * waveFreqY + waveSpeed) * amplitude * 0.5;      // was *0.7 → loop snap
+      const waveY = Math.cos(pt.y * waveFreqY - waveSpeed) * amplitude             // was *0.8 → loop snap
+                  + Math.cos(pt.x * waveFreqX + waveSpeed * 2) * amplitude * 0.5;  // was *0.5 → loop snap
 
       const x = pt.x + waveX;
       const y = pt.y + waveY;
 
       // Color from displacement amount
       const dispNorm = clamp((Math.abs(waveX) + Math.abs(waveY)) / (amplitude * 2), 0, 1);
-      ctx.fillStyle   = lerpColor(palette.text, palette.accent, dispNorm);
+      ctx.fillStyle   = lerpColorRGB(rgb_text, rgb_acc, dispNorm);
       ctx.globalAlpha = 0.8 + dispNorm * 0.2;
 
       ctx.beginPath();
@@ -650,6 +668,9 @@ const gravityFall = {
     const h   = canvas.height;
     const TAU = Math.PI * 2;
     const floor = h - h * 0.12; // floor at 88% down
+
+    const rgb_text = hexToRGB(palette.text);
+    const rgb_sec  = hexToRGB(palette.secondary);
 
     ctx.save();
 
@@ -702,7 +723,7 @@ const gravityFall = {
         }
 
         const colT = clamp((y - pt.y) / (floor - pt.y + 1), 0, 1);
-        ctx.fillStyle   = lerpColor(palette.text, palette.secondary, colT);
+        ctx.fillStyle   = lerpColorRGB(rgb_text, rgb_sec, colT);
         ctx.globalAlpha = clamp(alpha * 0.9, 0, 1);
 
         ctx.beginPath();
@@ -831,7 +852,7 @@ const charOrbit = {
       // Clamp so characters don't orbit off-canvas for long text strings
       radiusX = Math.min(radiusX, canvas.width  * 0.42);
       radiusY = Math.min(radiusY, canvas.height * 0.42);
-      const speed   = 1 + (ci * 0.0831) % 0.8;
+      const speed   = 1 + (ci % 2);  // was fractional → loop snap; alternates 1/2 per char
       const tilt    = (ci * 0.314) % Math.PI;
 
       const angle = time * TAU * speed + orbitPhase;
@@ -969,8 +990,8 @@ const auroraWave = {
       const freq2  = 0.002 + li * 0.00005;
       const amp1   = 60 + li * 2.5;
       const amp2   = 30 + li * 1.5;
-      const speed1 = 1 + li * 0.03;
-      const speed2 = 0.7 + li * 0.02;
+      const speed1 = 1 + Math.round(li * 0.04);  // integer cycles only (was fractional → loop snap)
+      const speed2 = 1;                           // was 0.7+li*0.02 → loop snap
       const phaseOff = li * 0.31;
 
       const colorT = li / numLines;
@@ -986,7 +1007,7 @@ const auroraWave = {
       }
       ctx.strokeStyle = col;
       ctx.lineWidth   = 1.2;
-      ctx.globalAlpha = 0.18 + 0.08 * Math.sin(t * 0.5 + phaseOff);
+      ctx.globalAlpha = 0.18 + 0.08 * Math.sin(t + phaseOff);  // was *0.5 → loop snap
       ctx.stroke();
     }
 
@@ -1041,7 +1062,7 @@ const voronoiField = {
     // Move sites
     const sites = this._sites.map((s, i) => ({
       x: s.x + Math.sin(time * TAU + s.phase * TAU) * w * 0.08,
-      y: s.y + Math.cos(time * TAU * 0.7 + s.phase * TAU) * h * 0.06,
+      y: s.y + Math.cos(time * TAU + s.phase * TAU) * h * 0.06,  // was *0.7 → loop snap
       phase: s.phase,
     }));
 
@@ -1063,7 +1084,7 @@ const voronoiField = {
         // Edge detection: distance to second site
         const edgeDist = Math.sqrt(secondDist) - Math.sqrt(minDist);
         const isEdge = edgeDist < 6;
-        const colorT  = (nearest / sites.length + time * 0.1 + sites[nearest].phase) % 1;
+        const colorT  = (nearest / sites.length + time + sites[nearest].phase) % 1;  // was *0.1 → loop snap
         const cellPulse = 0.3 + 0.15 * Math.sin(time * TAU * 2 + sites[nearest].phase * TAU);
 
         ctx.fillStyle   = isEdge ? palette.accent : lerpColor(palette.primary, palette.secondary, colorT);
@@ -1195,7 +1216,7 @@ const kaleidoscope = {
 
     for (let s = 0; s < symmetry; s++) {
       ctx.save();
-      ctx.rotate(s * sliceAngle + t * 0.15);
+      ctx.rotate(s * sliceAngle + t);  // was *0.15 → loop snap; 1 full rotation = seamless
       // Mirror every other slice
       if (s % 2 === 1) ctx.scale(-1, 1);
 
@@ -1203,11 +1224,11 @@ const kaleidoscope = {
       const numShapes = 6;
       for (let si = 0; si < numShapes; si++) {
         const phaseOff = si * 0.4 + s * 0.1;
-        const radius = 80 + si * 70 + Math.sin(t * (0.5 + si * 0.3) + phaseOff) * 50;
-        const innerR = radius * (0.3 + 0.2 * Math.sin(t * 0.7 + phaseOff));
-        const colorT = ((si / numShapes) + time * 0.2 + s * 0.05) % 1;
+        const radius = 80 + si * 70 + Math.sin(t * (1 + si) + phaseOff) * 50;  // was 0.5+si*0.3 → fractional
+        const innerR = radius * (0.3 + 0.2 * Math.sin(t + phaseOff));           // was *0.7 → loop snap
+        const colorT = ((si / numShapes) + time + s * 0.05) % 1;                // was *0.2 → loop snap
         const col = lerpColor(palette.primary, palette.accent, colorT);
-        const alpha = 0.12 + 0.08 * Math.sin(t * 1.1 + phaseOff);
+        const alpha = 0.12 + 0.08 * Math.sin(t * 2 + phaseOff);                 // was *1.1 → loop snap
 
         ctx.beginPath();
         ctx.moveTo(0, innerR);
@@ -1337,11 +1358,11 @@ const fractalNoise = {
 
         // 4 octaves of sine noise
         let v = 0;
-        v += Math.sin(nx * TAU * 2 + t * 0.5) * 0.4;
-        v += Math.sin(ny * TAU * 3 - t * 0.7) * 0.3;
-        v += Math.sin((nx + ny) * TAU * 5 + t * 1.1) * 0.15;
-        v += Math.sin((nx - ny) * TAU * 8 - t * 0.9) * 0.1;
-        v += Math.sin(nx * ny * TAU * 10 + t * 0.3) * 0.05;
+        v += Math.sin(nx * TAU * 2 + t * 1) * 0.40;   // was *0.5 → loop snap
+        v += Math.sin(ny * TAU * 3 - t * 1) * 0.30;   // was *0.7 → loop snap
+        v += Math.sin((nx + ny) * TAU * 5 + t * 2) * 0.15;  // was *1.1 → loop snap
+        v += Math.sin((nx - ny) * TAU * 8 - t * 1) * 0.10;  // was *0.9 → loop snap
+        v += Math.sin(nx * ny * TAU * 10 + t * 1) * 0.05;   // was *0.3 → loop snap
         // v in [-1, 1], normalize to [0, 1]
         const vn = clamp((v + 1) / 2, 0, 1);
 
@@ -1492,6 +1513,8 @@ const frequencyBars = {
     const barW = (w / NUM_BARS) * 0.75;
     const gap  = w / NUM_BARS;
 
+    ctx.save();
+
     for (let i = 0; i < NUM_BARS; i++) {
       let heightFrac;
       if (ad.hasAudio && ad.frequency) {
@@ -1531,7 +1554,7 @@ const frequencyBars = {
       ctx.fill();
     }
 
-    ctx.globalAlpha = 1;
+    ctx.restore();
   },
 };
 
@@ -1879,7 +1902,7 @@ const asciiGrid = {
 
         // Layered sine noise field — scrolls with time
         const noise = Math.sin(col * freq * cellSize + time * TAU) *
-                      Math.cos(row * freq * cellSize * 0.7 + time * TAU * 0.8);
+                      Math.cos(row * freq * cellSize * 0.7 + time * TAU);  // was *0.8 → loop snap
 
         // Map noise [-1,1] → char index
         const norm = (noise + 1) / 2; // 0..1
@@ -1939,9 +1962,9 @@ const halftone = {
 
         // Primary wave
         const val = 0.5 + 0.5 * Math.sin(cx * scale + time * TAU) *
-                                 Math.cos(cy * scale * 0.8 + time * TAU * 0.6);
+                                 Math.cos(cy * scale * 0.8 + time * TAU);        // was *0.6 → loop snap
         // Second wave for more complexity
-        const val2 = 0.5 * Math.sin((cx + cy) * scale * 0.5 + time * TAU * 1.3);
+        const val2 = 0.5 * Math.sin((cx + cy) * scale * 0.5 + time * TAU * 2);  // was *1.3 → loop snap
         const v = clamp(val + val2 * 0.4, 0, 1);
 
         const radius = v * gridSize * 0.55 * contrast;
@@ -2330,9 +2353,656 @@ const pixelRain = {
   },
 };
 
+// ── 30. Fire & Plasma ──────────────────────────────────────────────────────
+// Glyph points spawn upward particle streams with additive blending.
+// Two interleaved streams per point give continuous density without gaps.
+const firePlasma = {
+  id: 'fire-plasma',
+  name: 'Fire & Plasma',
+  description: 'Letters burn with flickering additive-blend fire',
+  category: 'text',
+  defaultPalette: 'warhol',
+  paletteId: 'warhol',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 3000,
+  density: 0.25,
+  params: { flameHeight: 0.10, flameDensity: 0.14 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const STREAMS = 2;
+    const riseH = canvas.height * (this.params?.flameHeight ?? 0.10);
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+
+    const WHITE = [255, 255, 255];
+    const HOT_THRESH = 0.3;
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+
+    const n = allPoints.length;
+    for (let i = 0; i < n; i++) {
+      const pt = allPoints[i];
+      for (let s = 0; s < STREAMS; s++) {
+        // Uniformly distributed phase so particles flow continuously
+        const phaseOff = (i * STREAMS + s) / (n * STREAMS);
+        const localT = (time + phaseOff) % 1;
+
+        // Subtle flicker via integer-cycle sin (seamless)
+        const flicker = 0.5 + 0.5 * Math.sin(localT * TAU * 3 + i * 0.7);
+
+        // easeOut rise: fast off the letter, slow dispersal at top
+        const dy = -riseH * easeOut(localT);
+
+        // Slight horizontal wobble (2 full cycles = seamless)
+        const dx = 4 * Math.sin(localT * TAU * 2 + i * 1.3);
+
+        // Bell-curve alpha — peaks at mid-life, tiny to avoid blowout
+        const alpha = Math.sin(localT * Math.PI) * (this.params?.flameDensity ?? 0.14) * flicker;
+        if (alpha < 0.005) continue;
+
+        // Color: white (base, hot) → primary → accent (cool, top)
+        ctx.globalAlpha = clamp(alpha, 0, 1);
+        ctx.fillStyle = localT < HOT_THRESH
+          ? lerpColorRGB(WHITE, rgb_p, localT / HOT_THRESH)
+          : lerpColorRGB(rgb_p, rgb_a, (localT - HOT_THRESH) / (1 - HOT_THRESH));
+        ctx.beginPath();
+        ctx.arc(pt.x + dx, pt.y + dy, 1.5, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 31. Sand Drain ─────────────────────────────────────────────────────────
+// Each glyph dot is a grain that drains downward and piles below the text.
+// Tight ±8% phase cluster makes grains drain mostly together.
+const sandDrain = {
+  id: 'sand-drain',
+  name: 'Sand Drain',
+  description: 'Text dissolves grain by grain into a settling pile',
+  category: 'text',
+  defaultPalette: 'desert',
+  paletteId: 'desert',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 5000,
+  density: 0.3,
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints, totalBbox } = glyphData;
+    const TAU = Math.PI * 2;
+    const pileBaseY = totalBbox.y + totalBbox.h + 28;
+    // Lifecycle boundaries
+    const T_FALL = 0.55, T_SETTLE = 0.65, T_FADE = 0.72;
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_s = hexToRGB(palette.secondary);
+
+    ctx.save();
+
+    for (let i = 0; i < allPoints.length; i++) {
+      const pt = allPoints[i];
+
+      // Tight phase cluster: grains drain mostly together (±8%)
+      const phaseOff = (ihash(i) - 0.5) * 0.16;
+      const localT = ((time + phaseOff) % 1 + 1) % 1;
+
+      if (localT > T_FADE) continue; // invisible reset window
+
+      // Fixed per-grain drift — computed once, reused across all lifecycle phases
+      const drift  = (ihash(i, 1) - 0.5) * 10;
+      const stackY = pileBaseY + ihash(i, 2) * 3;
+
+      let x, y, alpha;
+
+      if (localT < T_FALL) {
+        const t = localT / T_FALL;
+        x = pt.x + 3 * Math.sin(localT * TAU * 3 + i * 2.1) + drift * t;
+        y = lerp(pt.y, pileBaseY, easeIn(t));
+        alpha = 1;
+      } else if (localT < T_SETTLE) {
+        x = pt.x + drift;
+        y = stackY;
+        alpha = 1;
+      } else {
+        x = pt.x + drift;
+        y = stackY;
+        alpha = 1 - (localT - T_SETTLE) / (T_FADE - T_SETTLE);
+      }
+
+      ctx.globalAlpha = clamp(alpha, 0, 1);
+      ctx.fillStyle = lerpColorRGB(rgb_p, rgb_s, ihash(i, 3));
+      ctx.beginPath();
+      ctx.arc(x, y, 1.5, 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 32. Mirror Text ────────────────────────────────────────────────────────
+// Glyph points reflected into a 6-fold rotating mandala.
+// Rotation of time*TAU/3 (120° per loop) is seamless with 6-fold symmetry.
+const mirrorText = {
+  id: 'mirror-text',
+  name: 'Mirror Text',
+  description: 'Text reflected into a rotating N-fold mandala',
+  category: 'text',
+  defaultPalette: 'klimt',
+  paletteId: 'klimt',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 8000,
+  density: 0.2,
+  params: { sectors: 6 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const SECTORS = Math.max(2, Math.round(this.params?.sectors ?? 6));
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+
+    // 120° per loop: with 6-fold symmetry this wraps seamlessly
+    // 1 sector-width rotation per loop: TAU/SECTORS is always seamless for N-fold symmetry
+    const rotBase = time * TAU / SECTORS;
+    const timePhase = time * TAU;
+
+    // Precompute the 6 sector transforms once per frame (not inside the n-point loop)
+    // setTransform(a,b,c,d,e,f) = translate(cx,cy)*rotate(angle)*scale(mirror,1)
+    // → a=cos*mirror, b=sin*mirror, c=-sin, d=cos, e=cx, f=cy
+    const sectors = [];
+    for (let s = 0; s < SECTORS; s++) {
+      const angle  = (s / SECTORS) * TAU + rotBase;
+      const mirror = (s % 2 === 0) ? 1 : -1;
+      const cosA   = Math.cos(angle);
+      const sinA   = Math.sin(angle);
+      sectors.push([cosA * mirror, sinA * mirror, -sinA, cosA]);
+    }
+
+    ctx.save();
+
+    const n = allPoints.length;
+    for (let i = 0; i < n; i++) {
+      const pt = allPoints[i];
+      // Point relative to canvas centre
+      const px = pt.x - cx;
+      const py = pt.y - cy;
+
+      // Per-point spread across [0, TAU] so all phases are covered
+      const ptPhase = (i / n) * TAU;
+
+      // Subtle breathing pulse (2 cycles per loop = seamless)
+      const pulse = 1 + 0.08 * Math.sin(timePhase * 2 + ptPhase);
+
+      // Colour cycles between primary and accent (both 1 integer cycle = seamless)
+      const cf    = (Math.sin(timePhase + ptPhase) + 1) * 0.5;
+      const alpha = 0.65 + 0.35 * Math.sin(timePhase + ptPhase);  // was *0.5 → loop snap
+
+      ctx.fillStyle   = lerpColorRGB(rgb_p, rgb_a, cf);
+      ctx.globalAlpha = clamp(alpha, 0, 1);
+
+      const drawnX = px * pulse;
+      const drawnY = py * pulse;
+
+      // Use setTransform per sector — avoids n×6 save/restore stack operations
+      for (let s = 0; s < SECTORS; s++) {
+        const [a, b, c, d] = sectors[s];
+        ctx.setTransform(a, b, c, d, cx, cy);
+        ctx.beginPath();
+        ctx.arc(drawnX, drawnY, 1.5, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 33. Low-Poly 3D ────────────────────────────────────────────────────────
+// Glyph area divided into a grid. Active cells triangulated into shaded low-poly
+// faces that rotate on the Y axis. Per-vertex Z jitter gives each face a unique
+// normal → distinct shade → classic faceted low-poly aesthetic.
+const lowPoly3D = {
+  id: 'lowpoly-3d',
+  name: 'Low-Poly 3D',
+  description: 'Letterforms as shaded low-poly triangles rotating on Y axis',
+  category: 'text',
+  defaultPalette: 'hokusai',
+  paletteId: 'hokusai',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 6000,
+  density: 0.4,
+  params: { cellSize: 18, zDepth: 22 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints, totalBbox } = glyphData;
+    const TAU = Math.PI * 2;
+    const CELL  = Math.max(4, this.params?.cellSize ?? 18);
+    const Z_AMP = this.params?.zDepth ?? 22;
+
+    const { x: bx, y: by, w: bw, h: bh } = totalBbox;
+    const cols = Math.ceil(bw / CELL) + 1;
+    const rows = Math.ceil(bh / CELL) + 1;
+
+    // Cache active-cell set — rebuild when allPoints or CELL changes.
+    if (this._activePoints !== allPoints || this._lastCell !== CELL) {
+      this._activePoints = allPoints;
+      this._lastCell     = CELL;
+      this._active = new Set();
+      for (const pt of allPoints) {
+        const ci = Math.floor((pt.x - bx) / CELL);
+        const ri = Math.floor((pt.y - by) / CELL);
+        if (ci >= 0 && ci < cols && ri >= 0 && ri < rows) this._active.add(ri * cols + ci);
+      }
+    }
+    const active = this._active;
+
+    const cx = canvas.width / 2;
+    const cy = canvas.height / 2;
+
+    // Y rotation: full 360° per loop = seamless. Fixed 22° X tilt for depth.
+    const rotY = time * TAU;
+    const rotX = Math.PI * 0.12;
+    const cosY = Math.cos(rotY), sinY = Math.sin(rotY);
+    const cosX = Math.cos(rotX), sinX = Math.sin(rotX);
+    const FL = Math.max(canvas.width, canvas.height) * 1.4;
+
+    const Lx = 0.577, Ly = -0.577, Lz = 0.577;
+
+    const rotateVec = (wx, wy, wz) => {
+      const rx0 = wx * cosY - wz * sinY;
+      const rz0 = wx * sinY + wz * cosY;
+      return { vx: rx0, vy: wy * cosX - rz0 * sinX, vz: wy * sinX + rz0 * cosX };
+    };
+
+    const project = (wx, wy, wz) => {
+      const { vx, vy, vz } = rotateVec(wx, wy, wz);
+      const s = FL / (FL + vz);
+      return { sx: cx + vx * s, sy: cy + vy * s };
+    };
+
+    const shade = (p0, p1, p2) => {
+      const ax = p1[0]-p0[0], ay = p1[1]-p0[1], az = p1[2]-p0[2];
+      const bx2 = p2[0]-p0[0], by2 = p2[1]-p0[1], bz2 = p2[2]-p0[2];
+      let nx = ay*bz2 - az*by2, ny = az*bx2 - ax*bz2, nz = ax*by2 - ay*bx2;
+      const nl = Math.sqrt(nx*nx + ny*ny + nz*nz) || 1;
+      nx /= nl; ny /= nl; nz /= nl;
+      const { vx, vy, vz } = rotateVec(nx, ny, nz);
+      return clamp((vx*Lx + vy*Ly + vz*Lz + 1) * 0.5, 0, 1);
+    };
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+    const [sr, sg, sb] = hexToRGB(palette.secondary);
+
+    ctx.save();
+    // Wireframe style is constant for the whole frame — set once, not per-cell
+    ctx.strokeStyle = `rgba(${sr},${sg},${sb},0.35)`;
+    ctx.lineWidth   = 0.6;
+
+    for (let ri = 0; ri < rows - 1; ri++) {
+      for (let ci = 0; ci < cols - 1; ci++) {
+        if (!active.has(ri * cols + ci)) continue;
+
+        const x0 = bx + ci * CELL - cx,     y0 = by + ri * CELL - cy;
+        const x1 = bx + (ci+1) * CELL - cx, y1 = by + (ri+1) * CELL - cy;
+
+        // ihash(ci, ri) * 2 - 1 gives per-vertex Z jitter in [-1, 1]
+        const p00 = [x0, y0, (ihash(ci,   ri)   * 2 - 1) * Z_AMP];
+        const p10 = [x1, y0, (ihash(ci+1, ri)   * 2 - 1) * Z_AMP];
+        const p01 = [x0, y1, (ihash(ci,   ri+1) * 2 - 1) * Z_AMP];
+        const p11 = [x1, y1, (ihash(ci+1, ri+1) * 2 - 1) * Z_AMP];
+
+        const v00 = project(p00[0], p00[1], p00[2]);
+        const v10 = project(p10[0], p10[1], p10[2]);
+        const v01 = project(p01[0], p01[1], p01[2]);
+        const v11 = project(p11[0], p11[1], p11[2]);
+
+        // Triangle 1 (top-left)
+        ctx.fillStyle = lerpColorRGB(rgb_p, rgb_a, shade(p00, p10, p01));
+        ctx.beginPath();
+        ctx.moveTo(v00.sx, v00.sy); ctx.lineTo(v10.sx, v10.sy); ctx.lineTo(v01.sx, v01.sy);
+        ctx.closePath(); ctx.fill();
+
+        // Triangle 2 (bottom-right)
+        ctx.fillStyle = lerpColorRGB(rgb_p, rgb_a, shade(p10, p11, p01));
+        ctx.beginPath();
+        ctx.moveTo(v10.sx, v10.sy); ctx.lineTo(v11.sx, v11.sy); ctx.lineTo(v01.sx, v01.sy);
+        ctx.closePath(); ctx.fill();
+
+        // Wireframe edges
+        ctx.beginPath();
+        ctx.moveTo(v00.sx, v00.sy); ctx.lineTo(v10.sx, v10.sy);
+        ctx.lineTo(v11.sx, v11.sy); ctx.lineTo(v01.sx, v01.sy);
+        ctx.closePath();
+        ctx.moveTo(v10.sx, v10.sy); ctx.lineTo(v01.sx, v01.sy);
+        ctx.stroke();
+      }
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 34. Liquid Morph ───────────────────────────────────────────────────────
+// Glyph points rendered as large soft blobs with ctx.filter blur so overlapping
+// blobs merge into a liquid/metaball appearance. Points flow slowly.
+const liquidMorph = {
+  id: 'liquid-morph',
+  name: 'Liquid Morph',
+  description: 'Text melts into flowing liquid blobs that merge at the edges',
+  category: 'text',
+  defaultPalette: 'matisse',
+  paletteId: 'matisse',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 5000,
+  density: 0.15, // low density — fewer, larger blobs
+  params: { blobSize: 15, blurRadius: 9 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const n = allPoints.length;
+    const timePhase = time * TAU;
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+    const rgb_s = hexToRGB(palette.secondary);
+
+    // Helper to compute per-point blob params (shared by both paths)
+    const drawBlobs = (target) => {
+      for (let i = 0; i < n; i++) {
+        const pt = allPoints[i];
+        const ptPhase = (i / n) * TAU;
+
+        const dx    = 14 * Math.sin(timePhase     + ptPhase);
+        const dy    = 10 * Math.sin(timePhase * 2 + ptPhase + 1.0);
+        const blobR = (this.params?.blobSize ?? 15) + 5 * Math.sin(timePhase + ptPhase * 0.5);
+
+        const cf  = (Math.sin(timePhase + ptPhase) + 1) * 0.5;
+        const cf2 = (Math.sin(timePhase + ptPhase * 1.3) + 1) * 0.5;  // was *0.5 → loop snap
+        // Two-stop lerp: primary→accent blended toward secondary
+        const mid = [
+          lerp(rgb_p[0], rgb_a[0], cf),
+          lerp(rgb_p[1], rgb_a[1], cf),
+          lerp(rgb_p[2], rgb_a[2], cf),
+        ];
+        target.globalAlpha = 0.55;
+        target.fillStyle   = lerpColorRGB(mid, rgb_s, cf2 * 0.4);
+        target.beginPath();
+        target.arc(pt.x + dx, pt.y + dy, blobR, 0, TAU);
+        target.fill();
+      }
+    };
+
+    if (typeof OffscreenCanvas !== 'undefined') {
+      // Draw all blobs to a cached OffscreenCanvas with no filter, then composite
+      // with a single blur pass — far cheaper than N individual blurred arc draws.
+      if (!this._offscreen || this._offscreen.width !== canvas.width || this._offscreen.height !== canvas.height) {
+        this._offscreen = new OffscreenCanvas(canvas.width, canvas.height);
+      }
+      const off = this._offscreen;
+      const offCtx = off.getContext('2d');
+      offCtx.clearRect(0, 0, off.width, off.height);
+      drawBlobs(offCtx);
+      const blurPx = this.params?.blurRadius ?? 9;
+      ctx.save();
+      ctx.filter = `blur(${blurPx}px)`;
+      ctx.drawImage(off, 0, 0);
+      ctx.restore();
+    } else {
+      // jsdom / test fallback: draw blobs directly with filter active
+      const blurPx = this.params?.blurRadius ?? 9;
+      ctx.save();
+      ctx.filter = `blur(${blurPx}px)`;
+      drawBlobs(ctx);
+      ctx.restore();
+    }
+  },
+};
+
+// ── 35. Ribbon Flow ────────────────────────────────────────────────────────
+// allPoints bucketed into horizontal bands. Each contiguous x-span within a
+// band becomes a wavy ribbon strip. Colour flows along the ribbon over time.
+const ribbonFlow = {
+  id: 'ribbon-flow',
+  name: 'Ribbon Flow',
+  description: 'Flowing coloured ribbons thread through the letterforms',
+  category: 'text',
+  defaultPalette: 'coral',
+  paletteId: 'coral',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 4000,
+  density: 0.35,
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const BAND = 18;       // ribbon height in px
+    const GAP_MAX = 22;    // max gap (px) within a contiguous span
+    const WAVE_A = 7;      // wave amplitude in px
+    const STEPS = 80;      // polyline resolution
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+
+    // Cache bands — allPoints is stable between frames; no need to re-bucket
+    // and re-sort on every tick. Invalidate only when the point set changes.
+    if (this._cachedPoints !== allPoints) {
+      this._cachedPoints = allPoints;
+      this._bands = new Map();
+      for (const pt of allPoints) {
+        const key = Math.floor(pt.y / BAND);
+        if (!this._bands.has(key)) this._bands.set(key, []);
+        this._bands.get(key).push(pt.x);
+      }
+      for (const xs of this._bands.values()) xs.sort((a, b) => a - b);
+    }
+    const bands = this._bands;
+
+    ctx.save();
+    ctx.lineWidth = BAND * 0.7;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    for (const [key, xs] of bands) {
+      const baseY  = key * BAND + BAND * 0.5;
+      // Per-band colour (stays fixed per band, shifts across rows)
+      const rowPhase = key * 0.55;
+      const cf = (Math.sin(time * TAU * 2 + rowPhase) + 1) * 0.5;
+      const col = lerpColorRGB(rgb_p, rgb_a, cf).replace('rgb(', 'rgba(').replace(')', ',0.88)');
+
+      const drawSpan = (x0, x1) => {
+        if (x1 - x0 < 5) return;
+        const spanW = x1 - x0;
+        const flowOffset = -time * TAU * 3; // 3 integer cycles = seamless
+
+        ctx.beginPath();
+        for (let step = 0; step <= STEPS; step++) {
+          const t = step / STEPS;
+          const x = x0 + spanW * t;
+          const y = baseY + WAVE_A * Math.sin(t * TAU * 2 + flowOffset + rowPhase);
+          if (step === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = col;
+        ctx.stroke();
+      };
+
+      // Walk x-sorted points, emit a span whenever gap > GAP_MAX
+      let spanStart = xs[0], prev = xs[0];
+      for (let i = 1; i < xs.length; i++) {
+        if (xs[i] - prev > GAP_MAX) { drawSpan(spanStart, prev); spanStart = xs[i]; }
+        prev = xs[i];
+      }
+      drawSpan(spanStart, prev);
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 36. Ink Bleed ──────────────────────────────────────────────────────────
+// Each glyph point spawns an ink bleed: a dark spot that grows and fades, like
+// ink soaking through paper. Overlapping bleeds reinforce each other into dense
+// letterforms. Staggered phases give continuous, organic spread.
+const inkBleed = {
+  id: 'ink-bleed',
+  name: 'Ink Bleed',
+  description: 'Letters materialise as ink bleeding and soaking through paper',
+  category: 'text',
+  defaultPalette: 'monochrome',
+  paletteId: 'monochrome',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 4500,
+  density: 0.28,
+  params: { bleedRadius: 9, inkOpacity: 0.38 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const n = allPoints.length;
+    const MAX_R = this.params?.bleedRadius ?? 9;
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+    // Lifecycle boundaries
+    const T_GROW = 0.55, T_HOLD = 0.80, ALPHA_PEAK = this.params?.inkOpacity ?? 0.38;
+
+    ctx.save();
+
+    for (let i = 0; i < n; i++) {
+      const pt = allPoints[i];
+
+      // Spread phases so the letterform densifies gradually rather than all at once
+      const phaseOff = ihash(i) * 0.45;
+      const localT = (time + phaseOff) % 1;
+
+      // [0, T_GROW] grow, [T_GROW, T_HOLD] hold, [T_HOLD, 1] fade
+      let radius, alpha;
+      if (localT < T_GROW) {
+        const t = localT / T_GROW;
+        radius = MAX_R * easeOut(t);
+        alpha  = ALPHA_PEAK * easeOut(t);
+      } else if (localT < T_HOLD) {
+        radius = MAX_R;
+        alpha  = ALPHA_PEAK;
+      } else {
+        radius = MAX_R;
+        alpha  = ALPHA_PEAK * (1 - (localT - T_HOLD) / (1 - T_HOLD));
+      }
+      if (alpha < 0.01) continue;
+
+      const wobX = 2.5 * Math.sin(i * 1.7 + time * TAU);
+      const wobY = 2.5 * Math.cos(i * 2.3 + time * TAU);  // was *0.7 → loop snap
+
+      ctx.globalAlpha = clamp(alpha, 0, 1);
+      ctx.fillStyle = lerpColorRGB(rgb_p, rgb_a, ihash(i, 3));
+      ctx.beginPath();
+      ctx.arc(pt.x + wobX, pt.y + wobY, Math.max(0.5, radius), 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  },
+};
+
+// ── 37. Particle Entropy ───────────────────────────────────────────────────
+// Particles rest in letter formation, scatter into entropy, then snap back.
+// Hot (scattered) particles are accent-coloured; cool (ordered) are primary.
+// A chaotic tremor overlaid on the scatter envelope keeps the motion alive.
+const particleEntropy = {
+  id: 'particle-entropy',
+  name: 'Particle Entropy',
+  description: 'Letters scatter into hot entropy then cool back into formation',
+  category: 'text',
+  defaultPalette: 'vaporwave',
+  paletteId: 'vaporwave',
+  font: 'Space Grotesk',
+  textSize: 220,
+  letterSpacing: 0,
+  loopDuration: 5500,
+  density: 0.3,
+  params: { scatterRadius: 0.28, tremorAmount: 0.12 },
+
+  render(ctx, canvas, time, glyphData, palette) {
+    if (!glyphData?.allPoints?.length) return;
+    const { allPoints } = glyphData;
+    const TAU = Math.PI * 2;
+    const n = allPoints.length;
+    const MAX_DIST = Math.min(canvas.width, canvas.height) * (this.params?.scatterRadius ?? 0.28);
+
+    const rgb_p = hexToRGB(palette.primary);
+    const rgb_a = hexToRGB(palette.accent);
+
+    // Scatter envelope: sin(t*PI) peaks at t=0.5 (seamless: 0→max→0)
+    const tremorPhase = time * TAU * 7; // 7 integer cycles = seamless
+
+    ctx.save();
+
+    for (let i = 0; i < n; i++) {
+      const pt = allPoints[i];
+
+      // sin(time*π) is seamless: 0 at t=0, peaks at t=0.5, 0 at t=1.
+      // Per-particle peak-intensity variation via ihash avoids uniform explosion.
+      const peakScale = 0.7 + 0.3 * ihash(i, 3);
+      const localEnv  = Math.sin(time * Math.PI) * peakScale;  // was (time+phaseOff)*PI → loop snap
+
+      const angle  = ihash(i, 1) * TAU;
+      const distFn = 0.4 + 0.6 * ihash(i, 2);
+
+      const tremorA = localEnv * MAX_DIST * (this.params?.tremorAmount ?? 0.12);
+      const tremorX = tremorA * Math.sin(tremorPhase + i * 1.37);
+      const tremorY = tremorA * Math.cos(tremorPhase + i * 2.19);
+
+      const scatter = localEnv * MAX_DIST * distFn;
+      const x = pt.x + Math.cos(angle) * scatter + tremorX;
+      const y = pt.y + Math.sin(angle) * scatter + tremorY;
+
+      // Temperature colour: cool (primary) at rest → hot (accent) at peak scatter
+      const heat = localEnv * localEnv; // square for sharper hot zone
+
+      ctx.globalAlpha = lerp(0.75, 1.0, heat);
+      ctx.fillStyle   = lerpColorRGB(rgb_p, rgb_a, heat);
+      ctx.beginPath();
+      ctx.arc(x, y, lerp(2.2, 1.2, heat), 0, TAU);
+      ctx.fill();
+    }
+
+    ctx.restore();
+  },
+};
+
 // ── Export ─────────────────────────────────────────────────────────────────
 export const TEMPLATES = [
-  // Text templates
+  // ── Text (letterform-driven) ──────────────────────────────────────────────
   particleField,
   scatterReform,
   outlineFlow,
@@ -2344,7 +3014,19 @@ export const TEMPLATES = [
   typewriter,
   charOrbit,
   shatter,
-  // Geometry templates
+  tubingText,
+  dotMatrix,
+  neonWireframe,
+  pixelRain,
+  firePlasma,
+  sandDrain,
+  mirrorText,
+  lowPoly3D,
+  liquidMorph,
+  ribbonFlow,
+  inkBleed,
+  particleEntropy,
+  // ── Geometry (background / abstract) ─────────────────────────────────────
   auroraWave,
   voronoiField,
   flowField,
@@ -2352,20 +3034,14 @@ export const TEMPLATES = [
   concentricPulse,
   fractalNoise,
   truchetTiles,
-  // Audio-reactive templates
+  asciiGrid,
+  halftone,
+  // ── Audio-reactive ────────────────────────────────────────────────────────
   frequencyBars,
   oscilloscope,
   bassPulseText,
   frequencyRings,
   waveformTypography,
-  // Geometry templates (new)
-  asciiGrid,
-  halftone,
-  // Text templates (new)
-  tubingText,
-  dotMatrix,
-  neonWireframe,
-  pixelRain,
 ];
 
 export const DEFAULT_TEMPLATE_ID = 'particle-field';

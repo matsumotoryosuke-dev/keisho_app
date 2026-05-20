@@ -268,6 +268,39 @@ export function buildAudioPanel(panelEl, audioEngine) {
   section.appendChild(body);
   panelEl.appendChild(section);
 
+  // ── Sensitivity slider ────────────────────────────────────────────────────
+  // Scales bass / mid / treble / amplitude before templates see them, so the
+  // user can boost weak audio sources or tame over-reactive ones.
+  const sensRow = document.createElement('div');
+  sensRow.className = 'ctrl-row';
+
+  const sensLabel = document.createElement('label');
+  sensLabel.className = 'ctrl-label';
+  sensLabel.textContent = 'Sensitivity';
+
+  const sensValEl = document.createElement('span');
+  sensValEl.className = 'ctrl-value';
+  sensValEl.textContent = '1.0×';
+
+  const sensSlider = document.createElement('input');
+  sensSlider.type  = 'range';
+  sensSlider.min   = '0.2';
+  sensSlider.max   = '4.0';
+  sensSlider.step  = '0.1';
+  sensSlider.value = String(audioEngine.sensitivity);
+  sensSlider.className = 'ctrl-slider';
+
+  sensSlider.addEventListener('input', () => {
+    const v = parseFloat(sensSlider.value);
+    audioEngine.sensitivity = v;
+    sensValEl.textContent = v.toFixed(1) + '×';
+  });
+
+  sensRow.appendChild(sensLabel);
+  sensRow.appendChild(sensSlider);
+  sensRow.appendChild(sensValEl);
+  body.appendChild(sensRow);
+
   // ── Drop zone ──────────────────────────────────────────────────────────────
   const dropZone = document.createElement('div');
   dropZone.className = 'audio-drop-zone';
@@ -526,4 +559,6 @@ export function buildAudioPanel(panelEl, audioEngine) {
       _ampRafId = null;
     }
   };
+
+  return section;
 }

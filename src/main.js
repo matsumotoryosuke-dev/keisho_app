@@ -18,6 +18,20 @@ import { Exporter, EXPORT_PRESETS } from './engine/exporter.js';
 // ── Audio engine (singleton for this session) ──────────────────
 const audioEngine = new AudioEngine();
 
+/** Snapshot of audio analysis data for one frame, with sensitivity applied. */
+function buildAudioData(engine) {
+  const s = engine.sensitivity;
+  return {
+    waveform:  engine.getWaveform(),
+    frequency: engine.getFrequency(),
+    bass:      Math.min(1, engine.getBass()      * s),
+    mid:       Math.min(1, engine.getMid()       * s),
+    treble:    Math.min(1, engine.getTreble()    * s),
+    amplitude: Math.min(1, engine.getAmplitude() * s),
+    hasAudio:  engine.isLoaded,
+  };
+}
+
 // ── Canvas setup ───────────────────────────────────────────────
 const canvas  = document.getElementById('canvas');
 const preview = document.getElementById('preview');
@@ -175,15 +189,7 @@ renderer.onFrame = (time, ctx, canvasEl) => {
   const glyphData = getGlyphData();
 
   // 3. Build audio data snapshot for this frame
-  const audioData = {
-    waveform:  audioEngine.getWaveform(),
-    frequency: audioEngine.getFrequency(),
-    bass:      audioEngine.getBass(),
-    mid:       audioEngine.getMid(),
-    treble:    audioEngine.getTreble(),
-    amplitude: audioEngine.getAmplitude(),
-    hasAudio:  audioEngine.isLoaded,
-  };
+  const audioData = buildAudioData(audioEngine);
 
   // 4. Run the active template (6th param: audioData)
   if (activeTemplate && palette) {
@@ -245,15 +251,7 @@ function getSnapshotRenderer() {
       glyphData = _exportGlyphData;
     }
 
-    const audioData = {
-      waveform:  audioEngine.getWaveform(),
-      frequency: audioEngine.getFrequency(),
-      bass:      audioEngine.getBass(),
-      mid:       audioEngine.getMid(),
-      treble:    audioEngine.getTreble(),
-      amplitude: audioEngine.getAmplitude(),
-      hasAudio:  audioEngine.isLoaded,
-    };
+    const audioData = buildAudioData(audioEngine);
 
     if (snapshotTemplate && palette) {
       snapshotTemplate.render(ctx, canvasEl, time, glyphData, palette, audioData);
@@ -269,14 +267,33 @@ function getSnapshotRenderer() {
 // ── Headless export mode (used by MCP server / AI agents) ─────────────────
 async function doHeadlessExport(format, resolution) {
   const preset = EXPORT_PRESETS.find(p => p.id === resolution) || EXPORT_PRESETS.find(p => p.id === '1080p');
-  console.log(`[headless] starting ${format} export at ${resolution}`);
+
+  const needsFFmpeg = (format === 'prores' || format === 'mp4');
+
+  // Adaptive fps by resolution for ffmpeg exports.
+  // Playwright has no GPU acceleration so fewer frames = proportionally less time.
+  // WebM uses real-time MediaRecorder so 60fps is always correct there.
+  let fps = 60;
+  if (needsFFmpeg) {
+    if (resolution === '4k')                                   fps = 12;
+    else if (resolution === '1080p' || resolution === 'portrait') fps = 15;
+    else                                                       fps = 24; // 720p, square
+  }
+
+  // captureScale: render at reduced pixel count then upscale with ffmpeg lanczos.
+  // 0.5 = quarter of the pixels → ~4× faster frame capture in Playwright.
+  // 720p is already small enough that full-res capture is manageable.
+  const captureScale = (needsFFmpeg && resolution !== '720p') ? 0.5 : 1.0;
+
+  console.log(`[headless] starting ${format} export at ${resolution} (${fps}fps, captureScale=${captureScale})`);
 
   const exporter = new Exporter(getSnapshotRenderer(), {
     width:         preset.width,
     height:        preset.height,
-    fps:           60,
+    fps,
     loopDuration:  renderer.loopDuration,
     transparentBg: false,
+    captureScale,
     onProgress: (pct) => console.log(`[headless] ${(pct * 100).toFixed(0)}%`),
     onStatus:   (msg) => console.log(`[headless] ${msg}`),
   });

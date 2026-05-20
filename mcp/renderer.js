@@ -36,12 +36,18 @@ export async function renderAnimation({
   const context = await browser.newContext({ acceptDownloads: true });
   const page = await context.newPage();
 
-  // Forward headless log lines from the browser console
+  // Forward headless progress/error lines from the browser console
   page.on('console', msg => {
     const text = msg.text();
     if (text.startsWith('[headless]')) process.stderr.write(text + '\n');
   });
   page.on('pageerror', err => process.stderr.write(`[headless:error] ${err.message}\n`));
+  page.on('requestfailed', req => {
+    const url = req.url();
+    if (url.includes('ffmpeg') || url.includes('localhost')) {
+      process.stderr.write(`[headless:reqfail] ${url} — ${req.failure()?.errorText}\n`);
+    }
+  });
 
   // Build URL
   // Query string (before #): headless control params

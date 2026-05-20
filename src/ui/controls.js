@@ -202,10 +202,55 @@ const TEMPLATE_PARAM_DEFS = {
     { type: 'slider', key: 'fallDistance', label: 'Fall Distance', min: 0.1, max: 0.6, step: 0.05 },
     { type: 'slider', key: 'trailLength',  label: 'Trail Dots',    min: 0,   max: 3,   step: 1 },
   ],
+  'wave-morph': [
+    { type: 'slider', key: 'amplitude', label: 'Amplitude', min: 5, max: 40, step: 1, unit: 'px' },
+  ],
+  'mirror-text': [
+    { type: 'slider', key: 'sectors', label: 'Sectors',       min: 3,    max: 8,    step: 1 },
+  ],
+  'lowpoly-3d': [
+    { type: 'slider', key: 'cellSize', label: 'Cell Size', min: 8,  max: 30, step: 2, unit: 'px' },
+    { type: 'slider', key: 'zDepth',   label: 'Z Depth',   min: 5,  max: 40, step: 1, unit: 'px' },
+  ],
+  'fire-plasma': [
+    { type: 'slider', key: 'flameHeight',  label: 'Flame Height',  min: 0.05, max: 0.30, step: 0.01 },
+    { type: 'slider', key: 'flameDensity', label: 'Flame Density', min: 0.07, max: 0.25, step: 0.01 },
+  ],
+  'ink-bleed': [
+    { type: 'slider', key: 'bleedRadius', label: 'Bleed Radius', min: 3,    max: 18,   step: 1,    unit: 'px' },
+    { type: 'slider', key: 'inkOpacity',  label: 'Ink Opacity',  min: 0.15, max: 0.60, step: 0.01 },
+  ],
+  'liquid-morph': [
+    { type: 'slider', key: 'blobSize',   label: 'Blob Size', min: 8,  max: 25, step: 1, unit: 'px' },
+    { type: 'slider', key: 'blurRadius', label: 'Blur',      min: 4,  max: 16, step: 1, unit: 'px' },
+  ],
+  'particle-entropy': [
+    { type: 'slider', key: 'scatterRadius', label: 'Scatter', min: 0.10, max: 0.50, step: 0.01 },
+    { type: 'slider', key: 'tremorAmount',  label: 'Tremor',  min: 0.00, max: 0.30, step: 0.01 },
+  ],
 };
 
-// Module-level reference to the template params section body
+// Module-level references updated on each template switch
 let _templateParamsContainer = null;
+let _textSectionEl           = null;
+let _audioSectionEl          = null;
+
+/**
+ * Returns true if the template renders text/glyphs and should show the Text panel.
+ * Geometry templates and audio templates with needsGlyphs:false have no use for
+ * the text controls — font, size, letter-spacing, and the textarea are all no-ops.
+ */
+function templateUsesText(template) {
+  if (!template) return true; // safe default while panel initialises
+  if (template.category === 'geometry') return false;
+  if (template.needsGlyphs === false)   return false;
+  return true;
+}
+
+function templateUsesAudio(template) {
+  if (!template) return true; // safe default while panel initialises
+  return template.category === 'audio';
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Build (or rebuild) template param controls inside the given container
@@ -275,12 +320,24 @@ function buildTemplateParamsBody(container, template) {
 }
 
 /**
- * Update the template params section when the active template changes.
- * Safe to call before buildControls (no-op if panel not yet built).
+ * Update the template params section and Text panel visibility when the active
+ * template changes. Safe to call before buildControls (no-op if panel not built).
  */
 export function updateTemplateParams(template) {
   if (!_templateParamsContainer) return;
   buildTemplateParamsBody(_templateParamsContainer, template);
+
+  // Hide the Text section for templates that don't render glyphs — font, size,
+  // letter-spacing, and the textarea have no visual effect on those templates.
+  if (_textSectionEl) {
+    _textSectionEl.style.display = templateUsesText(template) ? '' : 'none';
+  }
+
+  // Hide the Audio section for non-audio templates — it has no relevance for
+  // text or geometry templates and adds visual noise.
+  if (_audioSectionEl) {
+    _audioSectionEl.style.display = templateUsesAudio(template) ? '' : 'none';
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,7 +434,9 @@ export function buildControls(renderer, textLayer, effects, panelEl, appState) {
   }));
 
   // ── TEXT SECTION ──────────────────────────────────────────────
-  panelEl.appendChild(makeSection('Text', false, (body) => {
+  // Visibility is toggled by updateTemplateParams(); hidden for geometry +
+  // non-glyph audio templates where these controls have no visual effect.
+  _textSectionEl = makeSection('Text', false, (body) => {
     const textRow = document.createElement('div');
     textRow.className = 'ctrl-row';
     const textarea = document.createElement('textarea');
@@ -421,7 +480,8 @@ export function buildControls(renderer, textLayer, effects, panelEl, appState) {
     const { row: lsRow } = makeSlider('Letter Spacing', 0, 80, textLayer.letterSpacing, 1,
       debounce((v) => { textLayer.letterSpacing = v; }, 100), 'px');
     body.appendChild(lsRow);
-  }));
+  });
+  panelEl.appendChild(_textSectionEl);
 
   // ── ANIMATION SECTION ─────────────────────────────────────────
   panelEl.appendChild(makeSection('Animation', false, (body) => {
@@ -653,7 +713,7 @@ export function buildControls(renderer, textLayer, effects, panelEl, appState) {
 
   // ── AUDIO PANEL ───────────────────────────────────────────────
   if (audioEngine) {
-    buildAudioPanel(panelEl, audioEngine);
+    _audioSectionEl = buildAudioPanel(panelEl, audioEngine);
   }
 
   // Footer

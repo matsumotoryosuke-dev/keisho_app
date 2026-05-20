@@ -40,6 +40,7 @@ export class AudioEngine {
     this._freqData = null;     // Uint8Array[fftSize/2]
 
     this.onEnded = null;       // Optional callback: fired when audio ends naturally
+    this.sensitivity = 1.0;   // Multiplier applied to all reactive values (set via UI slider)
 
     this._loadGen = 0;         // Generation counter — guards against concurrent loadFile races
   }

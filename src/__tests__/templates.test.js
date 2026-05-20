@@ -58,8 +58,8 @@ function makeMinimalGlyphData(charCount = 2) {
 // ── Structural tests ──────────────────────────────────────────────────────────
 
 describe('TEMPLATES array — structure', () => {
-  it('contains exactly 29 templates', () => {
-    expect(TEMPLATES).toHaveLength(29);
+  it('contains exactly 37 templates', () => {
+    expect(TEMPLATES).toHaveLength(37);
   });
 
   it('every template has required fields: id, name, category, render', () => {
