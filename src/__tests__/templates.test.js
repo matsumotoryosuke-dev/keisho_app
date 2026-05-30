@@ -326,6 +326,73 @@ describe('TEMPLATES — params objects', () => {
   );
 });
 
+// ── Degenerate grid-divisor params are clamped (perf DoS guard) ───────────────
+// ascii-grid / halftone / dot-matrix derive their cell loop from a param used as
+// the grid divisor (cols = ceil(w / cellSize)). A degenerate value reachable via a
+// corrupt save, an MCP param, or a deep-link (e.g. cellSize=1 on a 1920×1080
+// canvas → ~2M cells) would draw millions of cells per frame and freeze the tab.
+// render() must clamp the divisor to its slider minimum so the cell count stays
+// bounded. We assert via the number of per-cell draw calls on the mock context.
+
+describe('TEMPLATES — grid divisor params are clamped', () => {
+  // For each grid template: the param used as the divisor, its enforced floor,
+  // and the mock ctx method invoked once per cell.
+  const GRID_TEMPLATES = [
+    { id: 'ascii-grid', param: 'cellSize', floor: 8, perCell: 'fillText' },
+    { id: 'halftone',   param: 'gridSize', floor: 8, perCell: 'arc'      },
+    { id: 'dot-matrix', param: 'cellSize', floor: 4, perCell: 'arc'      },
+  ];
+
+  it.each(GRID_TEMPLATES)(
+    'template "$id" with $param=1 clamps to the floor (bounded cell count)',
+    ({ id, param, floor, perCell }) => {
+      const tpl    = TEMPLATES.find(t => t.id === id);
+      const ctx    = makeMockCtx();
+      const W = 1920, H = 1080;
+      const canvas = makeMockCanvas(W, H);
+      const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
+
+      const orig = { ...tpl.params };
+      tpl.params[param] = 1; // degenerate: unclamped → ceil(1920/1)*ceil(1080/1) ≈ 2.07M cells
+
+      try {
+        tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE);
+      } finally {
+        Object.assign(tpl.params, orig);
+      }
+
+      // With the clamp, cells ≈ ceil(W/floor)*ceil(H/floor). Allow generous
+      // headroom but stay far below the ~2M an unclamped divisor would produce.
+      const clampedCells = Math.ceil(W / floor) * Math.ceil(H / floor);
+      const maxExpected  = clampedCells * 1.2;
+      expect(ctx[perCell].mock.calls.length).toBeLessThanOrEqual(maxExpected);
+    }
+  );
+
+  it.each(GRID_TEMPLATES)(
+    'template "$id" tolerates NaN/0/negative $param without exploding',
+    ({ id, param, floor, perCell }) => {
+      const tpl    = TEMPLATES.find(t => t.id === id);
+      const W = 1920, H = 1080;
+      const canvas = makeMockCanvas(W, H);
+      const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
+      const clampedCells = Math.ceil(W / floor) * Math.ceil(H / floor);
+
+      const orig = { ...tpl.params };
+      for (const bad of [0, -5, NaN, undefined]) {
+        const ctx = makeMockCtx();
+        tpl.params[param] = bad;
+        try {
+          expect(() => tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE)).not.toThrow();
+        } finally {
+          Object.assign(tpl.params, orig);
+        }
+        expect(ctx[perCell].mock.calls.length).toBeLessThanOrEqual(clampedCells * 1.2);
+      }
+    }
+  );
+});
+
 // ── Calling render twice is idempotent (no crash on second call) ──────────────
 
 describe('TEMPLATES — render() is re-entrant', () => {
