@@ -71,6 +71,12 @@ describe('getPaletteById', () => {
     expect(palette.id).toBe(DEFAULT_PALETTE_ID);
   });
 
+  it('returns a fallback for null id', () => {
+    const palette = getPaletteById(null);
+    expect(palette).toBeDefined();
+    expect(palette.id).toBe(DEFAULT_PALETTE_ID);
+  });
+
   it('each known palette can be retrieved by id', () => {
     for (const p of PALETTES) {
       const found = getPaletteById(p.id);
