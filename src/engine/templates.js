@@ -17,9 +17,9 @@
  */
 
 // ── Easing helpers ─────────────────────────────────────────────────────────
-function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t; }
-function easeOut(t)   { return 1 - (1-t)*(1-t); }
-function easeIn(t)    { return t*t; }
+export function easeInOut(t) { return t < 0.5 ? 2*t*t : -1 + (4 - 2*t)*t; }
+export function easeOut(t)   { return 1 - (1-t)*(1-t); }
+export function easeIn(t)    { return t*t; }
 function lerp(a, b, t){ return a + (b-a)*t; }
 function clamp(v, lo, hi){ return v < lo ? lo : v > hi ? hi : v; }
 

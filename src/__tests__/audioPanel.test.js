@@ -416,3 +416,82 @@ describe('buildAudioPanel — teardown before first build', () => {
     expect(() => teardownAudioPanel()).not.toThrow();
   });
 });
+
+// ── Sensitivity slider — DOM structure ────────────────────────────────────────
+
+/**
+ * Engine mock that includes sensitivity (audioPanel.js reads engine.sensitivity
+ * to initialise sensSlider.value). The base makeEngineMock omits this field; we
+ * extend it here rather than touching shared test infrastructure.
+ */
+function makeEngineMockWithSensitivity(sensitivity = 1.0) {
+  return Object.assign(makeEngineMock(), { sensitivity });
+}
+
+describe('buildAudioPanel — sensitivity slider DOM', () => {
+  it('renders a sensitivity slider element with class ctrl-slider', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity());
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    expect(slider).not.toBeNull();
+  });
+
+  it('sensitivity slider has the expected min / max / step attributes', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity());
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    expect(slider.min).toBe('0.2');
+    expect(slider.max).toBe('4.0');
+    expect(slider.step).toBe('0.1');
+  });
+
+  it('sensitivity slider default value reflects engine.sensitivity (1.0)', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity(1.0));
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    expect(parseFloat(slider.value)).toBeCloseTo(1.0);
+  });
+
+  it('sensitivity slider initial value reflects a non-default engine.sensitivity (2.5)', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity(2.5));
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    expect(parseFloat(slider.value)).toBeCloseTo(2.5);
+  });
+
+  it('renders a sensitivity label with text "Sensitivity"', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity());
+    const labels = Array.from(document.querySelectorAll('.ctrl-label'));
+    const sensLabel = labels.find(el => el.textContent === 'Sensitivity');
+    expect(sensLabel).not.toBeNull();
+  });
+
+  it('renders a value display element with initial text "1.0×"', () => {
+    buildAudioPanel(getPanelEl(), makeEngineMockWithSensitivity(1.0));
+    // The panel initialises sensValEl from the engine value at build time; the
+    // display text is set to the static string "1.0×" in the source.
+    const valueEls = Array.from(document.querySelectorAll('.ctrl-value'));
+    const sensValEl = valueEls.find(el => el.textContent === '1.0×');
+    expect(sensValEl).not.toBeNull();
+  });
+
+  it('input event on slider updates engine.sensitivity', () => {
+    const engine = makeEngineMockWithSensitivity(1.0);
+    buildAudioPanel(getPanelEl(), engine);
+
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    slider.value = '2.0';
+    slider.dispatchEvent(new Event('input'));
+
+    expect(engine.sensitivity).toBeCloseTo(2.0);
+  });
+
+  it('input event on slider updates the displayed value text', () => {
+    const engine = makeEngineMockWithSensitivity(1.0);
+    buildAudioPanel(getPanelEl(), engine);
+
+    const slider = document.querySelector('input.ctrl-slider[type="range"]');
+    slider.value = '3.5';
+    slider.dispatchEvent(new Event('input'));
+
+    const valueEls = Array.from(document.querySelectorAll('.ctrl-value'));
+    const sensValEl = valueEls.find(el => el.textContent === '3.5×');
+    expect(sensValEl).not.toBeNull();
+  });
+});
