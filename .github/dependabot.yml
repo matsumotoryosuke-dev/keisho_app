@@ -1,0 +1,29 @@
+# Dependabot proposes library updates for this project once a week.
+#
+# - Small updates (the first version number stays the same) arrive together in
+#   ONE pull request per week. The dispatcher's Step 1.4 sweep merges it only
+#   after a fresh install + test run and an eng-director GO. Nothing here merges
+#   on its own.
+# - Big updates are ignored here on purpose: a new first number (5.x -> 7.x), or
+#   a new middle number on a 0.x library (0.185 -> 0.186), can break things and
+#   need Rio's decision. The dispatcher's dependency check files one board card
+#   per big update instead (claude-code-dispatch/scripts/dependency-check.mjs).
+
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "02:00"
+      timezone: America/Los_Angeles
+    open-pull-requests-limit: 2
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      small-updates:
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
