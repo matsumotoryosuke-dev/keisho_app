@@ -1,0 +1,32 @@
+name: dependabot-ci
+
+# Installs, tests and builds Dependabot's library updates on GitHub's machines,
+# so new library code never runs on Rio's Mac. The overnight merge step
+# (claude-code-dispatch task-execute Step 1.4b) merges a Dependabot PR only if
+# this `test-and-build` check passed on its exact commit.
+#
+# Runs ONLY for Dependabot's own pushes: no other PR pays Actions minutes for
+# it, and a PR someone else pushed to gets no check, so it is never auto-merged.
+# Dependabot-triggered runs get a read-only token and no repository secrets.
+
+on: pull_request
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    if: github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run build --if-present
