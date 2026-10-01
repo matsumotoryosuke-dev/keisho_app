@@ -1,9 +1,10 @@
 # Dependabot proposes library updates for this project once a week.
 #
 # - Small updates (the first version number stays the same) arrive together in
-#   ONE pull request per week. The dispatcher's Step 1.4 sweep merges it only
-#   after a fresh install + test run and an eng-director GO. Nothing here merges
-#   on its own.
+#   ONE pull request per week, at least 7 days after each release. GitHub
+#   installs, tests and builds it (workflows/dependabot-ci.yml); the dispatcher's
+#   Step 1.4b merges it only if that check passed and eng-director says GO.
+#   Nothing here merges on its own, and nothing from it runs on Rio's Mac.
 # - Big updates are ignored here on purpose: a new first number (5.x -> 7.x), or
 #   a new middle number on a 0.x library (0.185 -> 0.186), can break things and
 #   need Rio's decision. The dispatcher's dependency check files one board card
@@ -19,6 +20,10 @@ updates:
       time: "02:00"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 2
+    # Wait 7 days after a release before proposing it: most hijacked releases are
+    # caught and pulled within days (eng-director, 2026-10-01).
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: "chore(deps)"
     groups:
