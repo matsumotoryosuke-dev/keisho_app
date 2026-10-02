@@ -1882,7 +1882,8 @@ const asciiGrid = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const cellSize = this.params.cellSize;
+    // Unclamped, cellSize=1 on a 1920x1080 canvas is ~2M cells/frame and freezes the tab.
+    const cellSize = Math.max(8, Number(this.params.cellSize) || 8);
     const charset = this._charsets[this.params.charset] || this._charsets.standard;
     const numChars = charset.length;
     const freq = 0.008;
@@ -1947,7 +1948,9 @@ const halftone = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const { gridSize, scale, contrast } = this.params;
+    const { scale, contrast } = this.params;
+    // Unclamped, gridSize=1 on a 1920x1080 canvas is ~2M cells/frame and freezes the tab.
+    const gridSize = Math.max(8, Number(this.params.gridSize) || 8);
 
     ctx.save();
     ctx.fillStyle = palette.primary;
@@ -2115,7 +2118,8 @@ const dotMatrix = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const CELL = this.params.cellSize;
+    // Unclamped, cellSize=1 on a 1920x1080 canvas is ~2M cells/frame and freezes the tab.
+    const CELL = Math.max(4, Number(this.params.cellSize) || 4);
     const DOT_R = this.params.dotRadius;
 
     ctx.save();
