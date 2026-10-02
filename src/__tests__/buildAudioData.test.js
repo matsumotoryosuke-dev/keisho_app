@@ -1,46 +1,18 @@
 /**
  * buildAudioData.test.js
  *
- * Unit tests for the buildAudioData() helper defined in src/main.js.
+ * Unit tests for the buildAudioData() helper exported from src/engine/audioData.js.
  *
- * buildAudioData() is an unexported pure function whose contract is:
+ * buildAudioData() is a pure function whose contract is:
  *   - Read raw values from the audio engine (getBass, getMid, getTreble,
  *     getAmplitude, getWaveform, getFrequency, isLoaded)
  *   - Multiply each scalar value by engine.sensitivity
  *   - Clamp each result to [0, 1] with Math.min(1, value * s)
  *   - Return a plain object { bass, mid, treble, amplitude, waveform, frequency, hasAudio }
- *
- * Because buildAudioData is not exported we replicate its exact implementation
- * here and verify the mathematical contract. Any future change to the formula
- * in main.js must be reflected here — the two must stay in sync.
- *
- * The formula (from main.js):
- *   bass:      Math.min(1, engine.getBass()      * s)
- *   mid:       Math.min(1, engine.getMid()       * s)
- *   treble:    Math.min(1, engine.getTreble()    * s)
- *   amplitude: Math.min(1, engine.getAmplitude() * s)
- *   waveform:  engine.getWaveform()   (pass-through)
- *   frequency: engine.getFrequency()  (pass-through)
- *   hasAudio:  engine.isLoaded        (pass-through)
  */
 
 import { describe, it, expect, vi } from 'vitest';
-
-// ── Inline implementation matching main.js exactly ────────────────────────────
-
-/** Mirrors the unexported buildAudioData(engine) in src/main.js. */
-function buildAudioData(engine) {
-  const s = engine.sensitivity;
-  return {
-    waveform:  engine.getWaveform(),
-    frequency: engine.getFrequency(),
-    bass:      Math.min(1, engine.getBass()      * s),
-    mid:       Math.min(1, engine.getMid()       * s),
-    treble:    Math.min(1, engine.getTreble()    * s),
-    amplitude: Math.min(1, engine.getAmplitude() * s),
-    hasAudio:  engine.isLoaded,
-  };
-}
+import { buildAudioData } from '../engine/audioData.js';
 
 // ── Engine stub factory ───────────────────────────────────────────────────────
 

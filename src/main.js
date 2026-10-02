@@ -14,23 +14,10 @@ import { openSaveModal } from './ui/saveModal.js';
 import { createSave, getSaveById, updateSave, captureThumbnail } from './saves.js';
 import { AudioEngine } from './engine/audioEngine.js';
 import { Exporter, EXPORT_PRESETS } from './engine/exporter.js';
+import { buildAudioData } from './engine/audioData.js';
 
 // ── Audio engine (singleton for this session) ──────────────────
 const audioEngine = new AudioEngine();
-
-/** Snapshot of audio analysis data for one frame, with sensitivity applied. */
-function buildAudioData(engine) {
-  const s = engine.sensitivity;
-  return {
-    waveform:  engine.getWaveform(),
-    frequency: engine.getFrequency(),
-    bass:      Math.min(1, engine.getBass()      * s),
-    mid:       Math.min(1, engine.getMid()       * s),
-    treble:    Math.min(1, engine.getTreble()    * s),
-    amplitude: Math.min(1, engine.getAmplitude() * s),
-    hasAudio:  engine.isLoaded,
-  };
-}
 
 // ── Canvas setup ───────────────────────────────────────────────
 const canvas  = document.getElementById('canvas');
