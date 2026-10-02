@@ -305,6 +305,14 @@ describe('TEMPLATES — params objects', () => {
     }
   );
 
+  // dot-matrix's render() loops the canvas in cellSize-sized steps (ui/controls.js
+  // floors its slider at 4px), so forcing cellSize to the generic edge value of 1
+  // blows the loop up to ~2M cells and times out the test (T1319) without ever
+  // exercising a reachable real-world state. Floor it at the real UI minimum instead.
+  const MIN_OVERRIDES = {
+    'dot-matrix': { cellSize: 4 },
+  };
+
   it.each(PARAM_TEMPLATES)(
     'template "$id" render with mutated params does not throw',
     ({ id }) => {
@@ -314,9 +322,10 @@ describe('TEMPLATES — params objects', () => {
       const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
       // Save original params, mutate, render, restore
       const origParams = { ...tpl.params };
+      const overrides = MIN_OVERRIDES[id] || {};
       // Set all numeric params to their minimum safe value to exercise edge paths
       Object.keys(tpl.params).forEach(k => {
-        if (typeof tpl.params[k] === 'number') tpl.params[k] = 1;
+        if (typeof tpl.params[k] === 'number') tpl.params[k] = overrides[k] ?? 1;
         if (typeof tpl.params[k] === 'boolean') tpl.params[k] = false;
       });
       expect(() => tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE)).not.toThrow();
