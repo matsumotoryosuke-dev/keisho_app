@@ -305,14 +305,6 @@ describe('TEMPLATES — params objects', () => {
     }
   );
 
-  // dot-matrix's render() loops the canvas in cellSize-sized steps (ui/controls.js
-  // floors its slider at 4px), so forcing cellSize to the generic edge value of 1
-  // blows the loop up to ~2M cells and times out the test (T1319) without ever
-  // exercising a reachable real-world state. Floor it at the real UI minimum instead.
-  const MIN_OVERRIDES = {
-    'dot-matrix': { cellSize: 4 },
-  };
-
   it.each(PARAM_TEMPLATES)(
     'template "$id" render with mutated params does not throw',
     ({ id }) => {
@@ -322,10 +314,11 @@ describe('TEMPLATES — params objects', () => {
       const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
       // Save original params, mutate, render, restore
       const origParams = { ...tpl.params };
-      const overrides = MIN_OVERRIDES[id] || {};
-      // Set all numeric params to their minimum safe value to exercise edge paths
+      // Set all numeric params to their minimum safe value to exercise edge paths.
+      // ascii-grid/halftone/dot-matrix clamp their grid-divisor params internally
+      // (T1321), so cellSize/gridSize=1 is now safe to exercise directly.
       Object.keys(tpl.params).forEach(k => {
-        if (typeof tpl.params[k] === 'number') tpl.params[k] = overrides[k] ?? 1;
+        if (typeof tpl.params[k] === 'number') tpl.params[k] = 1;
         if (typeof tpl.params[k] === 'boolean') tpl.params[k] = false;
       });
       expect(() => tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE)).not.toThrow();
@@ -333,6 +326,62 @@ describe('TEMPLATES — params objects', () => {
       Object.assign(tpl.params, origParams);
     }
   );
+
+  // T1321: ascii-grid, halftone and dot-matrix use a numeric param as a grid
+  // divisor (cols/rows = ceil(dimension / param)). Unclamped, param=1 on a
+  // 1920x1080 canvas is ~2M cells/frame and freezes the tab -- reachable via a
+  // corrupt save, an MCP param, or a deep link, since the UI sliders (floors
+  // 8/8/4) never let a user reach it, but the render path had no floor of its
+  // own. These pin the clamp: draw-call count stays bounded even when the
+  // param is driven to 1 (or an invalid value), and no divide-by-zero/NaN path
+  // throws.
+  describe('grid-divisor params are clamped against render-loop blowup', () => {
+    const GRID_DIVISOR_CASES = [
+      { id: 'ascii-grid', key: 'cellSize', floor: 8, drawFn: 'fillText' },
+      { id: 'halftone',   key: 'gridSize', floor: 8, drawFn: 'arc' },
+      { id: 'dot-matrix', key: 'cellSize', floor: 4, drawFn: 'arc' },
+    ];
+
+    it.each(GRID_DIVISOR_CASES)(
+      'template "$id" caps $drawFn calls when $key is driven to 1',
+      ({ id, key, floor, drawFn }) => {
+        const tpl = TEMPLATES.find(t => t.id === id);
+        const ctx    = makeMockCtx();
+        const canvas = makeMockCanvas(1920, 1080);
+        const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
+        const origParams = { ...tpl.params };
+
+        tpl.params[key] = 1;
+        expect(() => tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE)).not.toThrow();
+
+        const cols = Math.ceil(canvas.width / floor);
+        const rows = Math.ceil(canvas.height / floor);
+        const maxCalls = Math.ceil(cols * rows * 1.2);
+        expect(ctx[drawFn].mock.calls.length).toBeLessThan(maxCalls);
+        expect(ctx[drawFn].mock.calls.length).toBeGreaterThan(0);
+
+        Object.assign(tpl.params, origParams);
+      }
+    );
+
+    it.each(GRID_DIVISOR_CASES)(
+      'template "$id" does not throw when $key is NaN/0/negative/undefined',
+      ({ id, key }) => {
+        const tpl = TEMPLATES.find(t => t.id === id);
+        const ctx    = makeMockCtx();
+        const canvas = makeMockCanvas(1920, 1080);
+        const glyph  = tpl.category === 'text' ? makeMinimalGlyphData(3) : null;
+        const origParams = { ...tpl.params };
+
+        for (const bad of [NaN, 0, -5, undefined]) {
+          tpl.params[key] = bad;
+          expect(() => tpl.render(ctx, canvas, 0.5, glyph, MOCK_PALETTE)).not.toThrow();
+        }
+
+        Object.assign(tpl.params, origParams);
+      }
+    );
+  });
 });
 
 // ── Calling render twice is idempotent (no crash on second call) ──────────────
