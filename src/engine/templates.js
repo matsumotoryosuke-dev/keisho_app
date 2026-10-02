@@ -1882,7 +1882,10 @@ const asciiGrid = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const cellSize = this.params.cellSize;
+    // Clamp to the slider minimum (8). Guards against a degenerate value from a
+    // corrupt save / MCP param / deep-link: cellSize=1 → ~2M cells/frame freezes
+    // the tab. The `|| 8` also catches NaN/0/undefined.
+    const cellSize = Math.max(8, Number(this.params.cellSize) || 8);
     const charset = this._charsets[this.params.charset] || this._charsets.standard;
     const numChars = charset.length;
     const freq = 0.008;
@@ -1947,7 +1950,10 @@ const halftone = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const { gridSize, scale, contrast } = this.params;
+    const { scale, contrast } = this.params;
+    // Clamp to the slider minimum (8); guards against a degenerate divisor
+    // (gridSize=1 → ~2M cells/frame). `|| 8` also catches NaN/0/undefined.
+    const gridSize = Math.max(8, Number(this.params.gridSize) || 8);
 
     ctx.save();
     ctx.fillStyle = palette.primary;
@@ -2115,8 +2121,10 @@ const dotMatrix = {
     const w = canvas.width;
     const h = canvas.height;
     const TAU = Math.PI * 2;
-    const CELL = this.params.cellSize;
-    const DOT_R = this.params.dotRadius;
+    // Clamp to the slider minimum (4); guards against a degenerate divisor
+    // (cellSize=1 → ~2M cells/frame freezes the tab). `|| 4` catches NaN/0/undefined.
+    const CELL = Math.max(4, Number(this.params.cellSize) || 4);
+    const DOT_R = Math.max(0.5, Number(this.params.dotRadius) || 2.5);
 
     ctx.save();
 
