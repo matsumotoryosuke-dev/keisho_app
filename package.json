@@ -16,7 +16,7 @@
   "license": "ISC",
   "type": "module",
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "jsdom": "^29.1.1",
     "vite": "^8.3.4",
     "vitest": "^4.1.4"
